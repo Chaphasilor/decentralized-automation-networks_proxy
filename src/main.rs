@@ -1,6 +1,7 @@
 use std::{error::Error, fmt};
-use std::time::{SystemTime};
+use std::time::{SystemTime, Duration};
 use std::net::{UdpSocket, SocketAddr};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 struct LatencyTestError {
@@ -18,9 +19,16 @@ impl fmt::Display for LatencyTestError {
 
 impl From<std::io::Error> for LatencyTestError {
     fn from(error: std::io::Error) -> Self {
-        LatencyTestError {
-            kind: String::from("io"),
-            message: error.to_string(),
+        if error.raw_os_error().unwrap() == 10060 {
+            LatencyTestError {
+                kind: String::from("timeout"),
+                message: String::from("Socket timed out while waiting for a response"),
+            }
+        } else {
+            LatencyTestError {
+                kind: String::from("io"),
+                message: error.to_string(),
+            }
         }
     }
 }
@@ -45,8 +53,33 @@ fn main() -> std::io::Result<()> {
     println!("\n=== Test Result ===\n");
     println!("One-way latency: {} µs", test_result.trip_time);
     println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
+    println!();
+
+    submit_test_result(test_result).unwrap();
     
     Ok(())
+}
+
+fn submit_test_result(result: LatencyTestResult) -> Result<(), Box<dyn std::error::Error>> {
+
+    let mut body = HashMap::new();
+    body.insert("trip_time", result.trip_time); 
+    body.insert("round_trip_time", result.round_trip_time); 
+    
+    let client = reqwest::blocking::Client::new();
+    let request = client.post("http://localhost:1880/test-result").json(&body).send();
+    
+    match request {
+        Ok(response) => {
+            println!("status: {}", response.status());
+        },
+        Err(err) => {
+            eprintln!("Couldn't submit test result to Node-RED: {}\n{:?}", err.source().unwrap(), err);
+        }
+    }
+
+    Ok(())
+    
 }
 
 fn test_latency(iterations: usize) -> LatencyTestResult {
@@ -58,12 +91,12 @@ fn test_latency(iterations: usize) -> LatencyTestResult {
     
     let mut successful_iterations = 0;
     
-    for i in 0..iterations {
+    for i in 1..=iterations {
         print!("Iteration {i}: ");
-        match test_latency_once() {
+        match test_latency_once(Some(Duration::from_millis(250))) {
             Ok(current_result ) => {
                 print!("TT: {} µs, ", current_result.trip_time);
-                print!("TTL: {} µs", current_result.round_trip_time);
+                print!("RTT: {} µs", current_result.round_trip_time);
                 println!("");
         
                 result.trip_time += current_result.trip_time;
@@ -81,12 +114,13 @@ fn test_latency(iterations: usize) -> LatencyTestResult {
     
 }
 
-fn test_latency_once() -> Result<LatencyTestResult, LatencyTestError> {
+fn test_latency_once(timeout: Option<Duration>) -> Result<LatencyTestResult, LatencyTestError> {
 
     let result;
     {
 
         let socket = UdpSocket::bind("127.0.0.1:34254")?;
+        socket.set_read_timeout(timeout).expect("Couldn't set socket timeout");
     
         let start = SystemTime::now();
         let time = start.duration_since(std::time::UNIX_EPOCH).expect("Couldn't get system time");
