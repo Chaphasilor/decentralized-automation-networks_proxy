@@ -1,7 +1,15 @@
 use std::{error::Error, fmt};
 use std::time::{SystemTime, Duration};
-use std::net::{UdpSocket, SocketAddr};
+use std::net::{SocketAddr};
 use std::collections::HashMap;
+use tokio::{net::{UdpSocket},task};
+use std::io;
+use futures::future;
+
+use crate::node_red::flows::{FlowsResponse, NODE_RED_BASE_URL};
+use crate::node_red::proxy::ProxyError;
+
+pub mod node_red;
 
 #[derive(Debug)]
 struct LatencyTestError {
@@ -47,16 +55,42 @@ struct LatencyTestResult {
     round_trip_time: u64,
 }
 
-fn main() -> std::io::Result<()> {
-    let test_result = test_latency(10);
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
 
-    println!("\n=== Test Result ===\n");
-    println!("One-way latency: {} µs", test_result.trip_time);
-    println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
-    println!();
+    let mut tasks: Vec<tokio::task::JoinHandle<()>> = vec![];
 
-    submit_test_result(test_result).unwrap();
+    tasks.push(
+        tokio::spawn(async move {
+            node_red::proxy::udp_sender_receiver().await;
+        })
+    );
     
+    tasks.push(
+        task::spawn_blocking(|| {
+            let test_result = test_latency(10);
+
+            println!("\n=== Test Result ===\n");
+            println!("One-way latency: {} µs", test_result.trip_time);
+            println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
+            println!();
+
+            submit_test_result(test_result).unwrap();
+
+            let flows = node_red::flows::convert_flows_response_to_flows(node_red::flows::get_all_flows().unwrap());
+            println!("flows: {:#?}", flows);
+
+            match node_red::proxy::forward_message_to_node_red("hi mom".to_string(), Some(Duration::from_millis(250))) {
+                Ok(_) => {},
+                Err(err) => {
+                    eprintln!("Error while forwarding message: {}", err.to_string());
+                }
+            }
+        })
+    );
+
+    future::join_all(tasks).await;
+
     Ok(())
 }
 
@@ -67,7 +101,7 @@ fn submit_test_result(result: LatencyTestResult) -> Result<(), Box<dyn std::erro
     body.insert("round_trip_time", result.round_trip_time); 
     
     let client = reqwest::blocking::Client::new();
-    let request = client.post("http://localhost:1880/test-result").json(&body).send();
+    let request = client.post(format!("{NODE_RED_BASE_URL}/test-result")).json(&body).send();
     
     match request {
         Ok(response) => {
@@ -107,8 +141,10 @@ fn test_latency(iterations: usize) -> LatencyTestResult {
         }
     }
 
-    result.trip_time /= successful_iterations;
-    result.round_trip_time /= successful_iterations;
+    if successful_iterations > 0 {
+        result.trip_time /= successful_iterations;
+        result.round_trip_time /= successful_iterations;
+    }
 
     result
     
@@ -116,31 +152,33 @@ fn test_latency(iterations: usize) -> LatencyTestResult {
 
 fn test_latency_once(timeout: Option<Duration>) -> Result<LatencyTestResult, LatencyTestError> {
 
-    let result;
-    {
+    // let result;
+    // {
 
-        let socket = UdpSocket::bind("127.0.0.1:34254")?;
-        socket.set_read_timeout(timeout).expect("Couldn't set socket timeout");
+    //     let socket = UdpSocket::bind("127.0.0.1:34254")?;
+    //     socket.set_read_timeout(timeout).expect("Couldn't set socket timeout");
     
-        let start = SystemTime::now();
-        let time = start.duration_since(std::time::UNIX_EPOCH).expect("Couldn't get system time");
-        let mut buf = (time.as_micros() as u64).to_be_bytes();
+    //     let start = SystemTime::now();
+    //     let time = start.duration_since(std::time::UNIX_EPOCH).expect("Couldn't get system time");
+    //     let mut buf = (time.as_micros() as u64).to_be_bytes();
     
-        let destination = SocketAddr::from(([127, 0, 0, 1], 34001));
+    //     let destination = SocketAddr::from(([127, 0, 0, 1], 34001));
     
-        socket.send_to(&buf, destination)?;
+    //     socket.send_to(&buf, destination)?;
     
-        let (_message_length, _src) = socket.recv_from(&mut buf)?;
-        let time_since_sent = start.elapsed().expect("Couldn't measure time").as_micros() as u64;
-        let receiver_time = (std::time::Duration::from_micros(u64::from_be_bytes(buf)) - time).as_micros() as u64;
+    //     let (_message_length, _src) = socket.recv_from(&mut buf)?;
+    //     let time_since_sent = start.elapsed().expect("Couldn't measure time").as_micros() as u64;
+    //     let receiver_time = (std::time::Duration::from_micros(u64::from_be_bytes(buf)) - time).as_micros() as u64;
 
-        result = LatencyTestResult {
-            trip_time: receiver_time,
-            round_trip_time: time_since_sent,
-        };
+    //     result = LatencyTestResult {
+    //         trip_time: receiver_time,
+    //         round_trip_time: time_since_sent,
+    //     };
         
-    }  // the socket is closed here
+    // }  // the socket is closed here
 
-    Result::Ok(result)
+    // Result::Ok(result)
+    
+    Result::Ok(LatencyTestResult { trip_time: 0, round_trip_time: 0 })
     
 }
