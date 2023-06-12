@@ -2,14 +2,19 @@ use std::{error::Error, fmt};
 use std::time::{SystemTime, Duration};
 use std::net::{SocketAddr};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use db::Event;
+use futures::executor::block_on;
 use tokio::{net::{UdpSocket},task};
+use tokio::sync::mpsc;
 use std::io;
-use futures::future;
+use futures::{future, Future};
 
 use crate::node_red::flows::{FlowsResponse, NODE_RED_BASE_URL};
 use crate::node_red::proxy::ProxyError;
 
 pub mod node_red;
+pub mod db;
 
 #[derive(Debug)]
 struct LatencyTestError {
@@ -60,14 +65,47 @@ async fn main() -> std::io::Result<()> {
 
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = vec![];
 
+    let (tx, mut rx) = mpsc::channel::<Event>(32);
+    let localTx = tx.clone();
+    let nodeReceiverTx = tx.clone();
+    let proxyReceiverTx = tx.clone();
+
+    // db
     tasks.push(
         tokio::spawn(async move {
-            node_red::proxy::udp_sender_receiver().await;
+            match db::db_worker(rx).await {
+                Ok(_) => {},
+                Err(err) => {
+                    eprintln!("Error from database worker: {}", err.to_string());
+                }
+            };
+        })
+    );
+
+    tasks.push(
+        tokio::spawn(async move {
+            match node_red::proxy::udp_node_red_receiver(nodeReceiverTx).await {
+                Ok(_) => {},
+                Err(err) => {
+                    eprintln!("Error from Node-RED UDP receiver: {}", err.to_string());
+                }
+            };
+        })
+    );
+
+    tasks.push(
+        tokio::spawn(async move {
+            match node_red::proxy::udp_proxy_receiver(proxyReceiverTx).await {
+                Ok(_) => {},
+                Err(err) => {
+                    eprintln!("Error from proxy UDP receiver: {}", err.to_string());
+                }
+            };
         })
     );
     
     tasks.push(
-        task::spawn_blocking(|| {
+        task::spawn_blocking(move || {
             let test_result = test_latency(10);
 
             println!("\n=== Test Result ===\n");
@@ -80,7 +118,8 @@ async fn main() -> std::io::Result<()> {
             let flows = node_red::flows::convert_flows_response_to_flows(node_red::flows::get_all_flows().unwrap());
             println!("flows: {:#?}", flows);
 
-            match node_red::proxy::forward_message_to_node_red("hi mom".to_string(), Some(Duration::from_millis(250))) {
+            let x = node_red::proxy::forward_message_to_node_red("hi mom".to_string(), Some(Duration::from_millis(250)), localTx.clone());
+            match block_on(x) {
                 Ok(_) => {},
                 Err(err) => {
                     eprintln!("Error while forwarding message: {}", err.to_string());
