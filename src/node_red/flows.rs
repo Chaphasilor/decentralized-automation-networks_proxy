@@ -1,8 +1,10 @@
 use std::collections::{HashMap};
-use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize, ser::SerializeStruct};
+use serde_with::skip_serializing_none;
 use std::{error::Error, fmt};
 
-#[derive(Deserialize, Debug, Clone)]
+#[skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FlowNodeResponse {
     id: String,
     #[serde(rename = "type")]
@@ -10,6 +12,7 @@ pub struct FlowNodeResponse {
     label: Option<String>,
     disabled: Option<bool>,
     info: Option<String>,
+    configs: Option<Vec<serde_json::Value>>,
     env: Option<Vec<String>>,
     x: Option<u32>,
     y: Option<u32>,
@@ -37,38 +40,88 @@ pub struct FlowNodeResponse {
     field: Option<String>,
     fieldType: Option<String>,
     template: Option<String>,
+    iface: Option<String>,
+    port: Option<String>,
+    ipv: Option<String>,
+    multicast: Option<String>,
+    group: Option<String>,
+    datatype: Option<String>,
+    syntax: Option<String>,
+    output: Option<String>,
+    addr: Option<String>,
 }
-#[derive(Deserialize, Debug)]
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct FlowsResponse {
     flows: Vec<FlowNodeResponse>,
     rev: String,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Flow {
     nodes: Vec<FlowNodeResponse>,
     id: String,
+    name: Option<String>,
+    disabled: bool,
+    configs: Vec<serde_json::Value>,
     input_area: Option<String>,
     output_area: Option<String>,
 }
-#[derive(Debug)]
+
+impl Serialize for Flow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer
+    {
+        let mut state = serializer.serialize_struct("Flow", 5)?;
+        state.serialize_field("nodes", &self.nodes)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("label", &self.name)?;
+        state.serialize_field("configs", &self.configs)?;
+        state.serialize_field("disabled", &self.disabled)?;
+        state.end()
+    }
+}
+
+
+#[derive(Debug, Serialize)]
 pub struct Flows {
-    flows: HashMap<String, Flow>,
+    pub flows: HashMap<String, Flow>,
     rev: String,
+}
+
+#[derive(Debug)]
+pub struct FlowError {
+    message: String,
+}
+
+impl Error for FlowError {}
+
+impl fmt::Display for FlowError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{message}", message = self.message)
+    }
+}
+
+impl FlowError {
+    pub fn new(message: String) -> Self {
+        FlowError {
+            message,
+        }
+    }
 }
 
 pub static NODE_RED_BASE_URL: &'static str = "http://localhost:1880";
 
-pub fn get_all_flows() -> Result<FlowsResponse, Box<dyn std::error::Error>> {
+pub async fn get_all_flows(client: &reqwest::Client) -> Result<FlowsResponse, Box<dyn std::error::Error>> {
 
-  let client = reqwest::blocking::Client::new();
   let request = client.get(format!("{NODE_RED_BASE_URL}/flows"))
     .header("Node-RED-API-Version", "v2")
     .send();
   
-  match request {
+  match request.await {
       Ok(response) => {
           println!("status: {}", response.status());
-          match response.json::<FlowsResponse>() {
+          match response.json::<FlowsResponse>().await {
             Ok(flows_response) => {
                 return Ok(flows_response);
             },
@@ -94,8 +147,12 @@ pub fn convert_flows_response_to_flows(response: FlowsResponse) -> Flows {
     
     response.flows[..].iter().filter(|flow_node| flow_node._type == "tab").for_each(|flow_node| {
         let new_flow = Flow{
-            nodes: vec![flow_node.clone()],
+            // nodes: vec![flow_node.clone()],
+            nodes: vec![],
             id: flow_node.id.to_string(),
+            name: flow_node.label.clone(),
+            disabled: flow_node.disabled.unwrap_or(false),
+            configs: if flow_node.configs.is_some() {flow_node.configs.clone().unwrap()} else {vec![]},
             input_area: None,
             output_area: None,
         };
@@ -125,3 +182,55 @@ pub fn convert_flows_response_to_flows(response: FlowsResponse) -> Flows {
     flows
 
 }
+
+pub fn get_flow_by_id(flows: &Flows, id: &str) -> Option<Flow> {
+    flows.flows.get(id).map(|flow| flow.clone())
+}
+
+pub fn get_flow_id_by_name(flows: &Flows, name: &str) -> Option<String> {
+    flows.flows.iter().find(|(_, flow)| {
+        if let Some(flow_name) = &flow.name {
+            flow_name == name
+        } else {
+            false
+        }
+    }).map(|(id, _)| id.to_string())
+}
+
+pub async fn update_flow_status(client: &reqwest::Client, id: &str, is_disabled: bool) -> Result<(), FlowError> {
+
+    let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
+    let mut flows = flows.flows;
+    
+    if let Some(flow) = flows.get_mut(id) {
+        // // disable each node in the flow
+        // flow.nodes.iter_mut().for_each(|node| {
+        //     node.disabled = Some(true);
+        // });
+        flow.disabled = is_disabled;
+
+        // println!("updated flow: {}", serde_json::to_string(&flow).unwrap());
+
+        // push changes to Node-RED asynchronously
+        let client = reqwest::Client::new();
+        let request = client.put(format!("{NODE_RED_BASE_URL}/flow/{id}", id=id))
+            .header("Node-RED-API-Version", "v2")
+            .json(&flow);
+        match request.send().await {
+            Ok(response) => {
+                return Ok(())
+            },
+            Err(err) => {
+                eprintln!("Couldn't update status of flow with id {}: {}\n{:?}", id, err.source().unwrap(), err);
+                return Err(FlowError::new(format!("Couldn't update status of flow with id {}", id)));
+            }
+        }
+        // Ok(())
+        
+    } else {
+        eprintln!("Couldn't find flow with id {}", id);
+        Err(FlowError::new(format!("Couldn't find flow with id {}", id)))
+    }
+}
+
+
