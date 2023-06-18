@@ -3,12 +3,20 @@ use std::time::{SystemTime, Duration};
 use std::net::{SocketAddr};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use db::Event;
+use db::{Event, Message};
 use futures::executor::block_on;
+use serde_json::json;
 use tokio::{net::{UdpSocket},task};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use std::io;
 use futures::{future, Future};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    http::StatusCode,
+    response::IntoResponse,
+    Json, Router,
+};
 
 use crate::node_red::flows::{FlowsResponse, NODE_RED_BASE_URL};
 use crate::node_red::proxy::ProxyError;
@@ -60,15 +68,24 @@ struct LatencyTestResult {
     round_trip_time: u64,
 }
 
+struct AppState {
+    tx: mpsc::Sender<Message>,
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
 
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = vec![];
 
-    let (tx, mut rx) = mpsc::channel::<Event>(32);
-    let localTx = tx.clone();
-    let nodeReceiverTx = tx.clone();
-    let proxyReceiverTx = tx.clone();
+    let (tx, mut rx) = mpsc::channel::<Message>(32);
+    let local_tx = tx.clone();
+    let shared_state_tx = tx.clone();
+    let node_receiver_tx = tx.clone();
+    let proxy_receiver_tx = tx.clone();
+
+    let shared_state = Arc::new(AppState{
+        tx: shared_state_tx,
+    });
 
     // db
     tasks.push(
@@ -84,7 +101,7 @@ async fn main() -> std::io::Result<()> {
 
     tasks.push(
         tokio::spawn(async move {
-            match node_red::proxy::udp_node_red_receiver(nodeReceiverTx).await {
+            match node_red::proxy::udp_node_red_receiver(node_receiver_tx).await {
                 Ok(_) => {},
                 Err(err) => {
                     eprintln!("Error from Node-RED UDP receiver: {}", err.to_string());
@@ -95,7 +112,7 @@ async fn main() -> std::io::Result<()> {
 
     tasks.push(
         tokio::spawn(async move {
-            match node_red::proxy::udp_proxy_receiver(proxyReceiverTx).await {
+            match node_red::proxy::udp_proxy_receiver(proxy_receiver_tx).await {
                 Ok(_) => {},
                 Err(err) => {
                     eprintln!("Error from proxy UDP receiver: {}", err.to_string());
@@ -116,9 +133,15 @@ async fn main() -> std::io::Result<()> {
             submit_test_result(test_result).unwrap();
 
             let flows = node_red::flows::convert_flows_response_to_flows(node_red::flows::get_all_flows().unwrap());
-            println!("flows: {:#?}", flows);
+            // println!("flows: {:#?}", flows);
 
-            let x = node_red::proxy::forward_message_to_node_red("hi mom".to_string(), Some(Duration::from_millis(250)), localTx.clone());
+            let x = node_red::proxy::forward_message_to_node_red(json!({
+                "payload": "hi mom",
+                "meta": {
+                    "flow_name": "Flow 0",
+                    "execution_area": "room0"
+                }
+            }), Some(Duration::from_millis(250)), local_tx.clone());
             match block_on(x) {
                 Ok(_) => {},
                 Err(err) => {
@@ -128,12 +151,95 @@ async fn main() -> std::io::Result<()> {
         })
     );
 
+    // set up a simple HTTP web server for controlling the proxy
+    let app = Router::new()
+        .route("/db/log", get(log_db_handler))
+        .route("/db/get", get(get_db_handler))
+        .route("/db/save", get(save_db_handler))
+        .with_state(shared_state);
+
+    // run our app with hyper
+    // `axum::Server` is a re-export of `hyper::Server`
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+    
     future::join_all(tasks).await;
 
     Ok(())
+    
 }
 
-fn submit_test_result(result: LatencyTestResult) -> Result<(), Box<dyn std::error::Error>> {
+async fn log_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Ok(_) = state.tx.send(db::Message{
+        message_type: db::MessageType::LogDB,
+        response: None,
+    }).await {
+        (StatusCode::OK, Json(json!({
+            "message": "Database logged"
+        })))
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+            "message": "Database could not be logged"
+        })))
+    }
+}
+
+async fn save_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Ok(_) = state.tx.send(db::Message{
+        message_type: db::MessageType::SaveDB("./data/db.json".to_string()),
+        response: None,
+    }).await {
+        (StatusCode::OK, Json(json!({
+            "message": "Database saved"
+        })))
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+            "message": "Database could not be saved"
+        })))
+    }
+}
+
+async fn get_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+
+    let (response_tx, response_rx) = oneshot::channel();
+
+    if let Ok(_) = state.tx.send(db::Message{
+        message_type: db::MessageType::GetDB,
+        response: Some(response_tx),
+    }).await {
+
+        if let Ok(response) = response_rx.await {
+            match response {
+                Ok(db) => {
+                    (StatusCode::OK, Json(json!({
+                        "message": "Database retrieved",
+                        "db": db
+                    })))
+                },
+                Err(err) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                        "message": "Database could not be retrieved",
+                        "error": err.to_string()
+                    })))
+                }
+            }
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+                "message": "Database could not be retrieved"
+            })))
+        }
+
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+            "message": "Database could not be retrieved"
+        })))
+    }
+}
+
+  fn submit_test_result(result: LatencyTestResult) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut body = HashMap::new();
     body.insert("trip_time", result.trip_time); 
