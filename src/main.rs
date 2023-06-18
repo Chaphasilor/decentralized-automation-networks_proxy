@@ -1,16 +1,14 @@
 use axum::{
-    extract::State,
+    extract::{State, Json, rejection::JsonRejection},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
-    Json, Router,
+    routing::{get, post, put},
+    Router,
 };
 use db::{Event, Message};
-use futures::executor::block_on;
 use futures::{future, Future};
 use serde_json::json;
 use std::collections::HashMap;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -18,8 +16,7 @@ use std::{error::Error, fmt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::{net::UdpSocket, task};
 
-use crate::node_red::flows::{FlowsResponse, NODE_RED_BASE_URL};
-use crate::node_red::proxy::ProxyError;
+use crate::node_red::flows;
 
 pub mod db;
 pub mod node_red;
@@ -75,11 +72,14 @@ struct LatencyTestResult {
 
 struct AppState {
     tx: mpsc::Sender<Message>,
+    client: reqwest::Client,
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = vec![];
+
+    let client = reqwest::Client::new();
 
     let (tx, mut rx) = mpsc::channel::<Message>(32);
     let local_tx = tx.clone();
@@ -89,6 +89,7 @@ async fn main() -> std::io::Result<()> {
 
     let shared_state = Arc::new(AppState {
         tx: shared_state_tx,
+        client: client.clone(),
     });
 
     // db
@@ -119,7 +120,7 @@ async fn main() -> std::io::Result<()> {
         };
     }));
 
-    tasks.push(task::spawn_blocking(move || {
+    tasks.push(tokio::spawn(async move {
         let test_result = test_latency(10);
 
         println!("\n=== Test Result ===\n");
@@ -127,14 +128,14 @@ async fn main() -> std::io::Result<()> {
         println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
         println!();
 
-        submit_test_result(test_result).unwrap();
+        submit_test_result(&client, test_result).await.unwrap();
 
         let flows = node_red::flows::convert_flows_response_to_flows(
-            node_red::flows::get_all_flows().unwrap(),
+            node_red::flows::get_all_flows(&client).await.unwrap(),
         );
-        // println!("flows: {:#?}", flows);
+        println!("flows: {}", serde_json::to_string(&flows).unwrap());
 
-        let x = node_red::proxy::forward_message_to_node_red(
+        if let Err(err) = node_red::proxy::forward_message_to_node_red(
             json!({
                 "payload": "hi mom",
                 "meta": {
@@ -144,13 +145,13 @@ async fn main() -> std::io::Result<()> {
             }),
             Some(Duration::from_millis(250)),
             local_tx.clone(),
-        );
-        match block_on(x) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Error while forwarding message: {}", err.to_string());
-            }
-        }
+        ).await {
+            eprintln!("Error while forwarding message: {}", err.to_string());
+        };
+    }));
+
+    tasks.push(task::spawn_blocking(move || {
+
     }));
 
     // set up a simple HTTP web server for controlling the proxy
@@ -158,6 +159,7 @@ async fn main() -> std::io::Result<()> {
         .route("/db/log", get(log_db_handler))
         .route("/db/get", get(get_db_handler))
         .route("/db/save", get(save_db_handler))
+        .route("/flows/updateStatus", put(update_flow_status_handler))
         .with_state(shared_state);
 
     // run our app with hyper
@@ -269,16 +271,90 @@ async fn get_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
     }
 }
 
-fn submit_test_result(result: LatencyTestResult) -> Result<(), Box<dyn std::error::Error>> {
+#[derive(serde::Deserialize)]
+struct UpdateFlowPayload{
+    name: String,
+    disabled: bool,
+}
+async fn update_flow_status_handler(
+    State(state): State<Arc<AppState>>,
+    payload: Result<Json<UpdateFlowPayload>, JsonRejection>
+) -> impl IntoResponse {
+
+    match payload {
+        Ok(payload) => {
+            // We got a valid JSON payload
+
+            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
+            
+            if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
+                if let Err(err) = flows::update_flow_status(&state.client, &flow_id, payload.disabled).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "message": format!("Flow could not be {}", if payload.disabled {"disabled"} else {"enabled"}),
+                            "error": err.to_string()
+                        })),
+                    );
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "message": format!("Flow {}", if payload.disabled {"disabled"} else {"enabled"}),
+                        })),
+                    )
+                }
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "message": "Flow not found"
+                    })),
+                )
+            }
+            
+        }
+        Err(JsonRejection::JsonDataError(err)) => {
+            // Couldn't deserialize the body into the target type
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": format!("Missing fields: {}", err.to_string()), 
+                })),
+            )
+        }
+        Err(JsonRejection::JsonSyntaxError(_)) => {
+            // Syntax error in the body
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": "Invalid JSON"
+                })),
+            )
+        }
+        Err(_) => {
+            // `JsonRejection` is marked `#[non_exhaustive]` so match must
+            // include a catch-all case.
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "message": "Unknown error"
+                })),
+            )
+        }
+    }
+    
+}
+
+async fn submit_test_result(client: &reqwest::Client, result: LatencyTestResult) -> Result<(), Box<dyn std::error::Error>> {
     let mut body = HashMap::new();
     body.insert("trip_time", result.trip_time);
     body.insert("round_trip_time", result.round_trip_time);
 
-    let client = reqwest::blocking::Client::new();
     let request = client
-        .post(format!("{NODE_RED_BASE_URL}/test-result"))
+        .post(format!("{}/test-result", flows::NODE_RED_BASE_URL))
         .json(&body)
-        .send();
+        .send().await;
 
     match request {
         Ok(response) => {
