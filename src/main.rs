@@ -92,6 +92,14 @@ async fn main() -> std::io::Result<()> {
         client: client.clone(),
     });
 
+    let port_in_from_input_node_base = 34000; // used by proxies and output nodes as inbound port
+    let port_out_to_node_red_base = 35000;
+    let port_node_red_in_base = 36000; // only used as a target
+    let port_node_red_out_base = 39000; // only used in Node-RED
+    let port_in_from_node_red_base = 37000;
+    let port_out_to_proxy_or_output_node_base = 38000;
+    let port_range = 1..=10;
+
     // db
     tasks.push(tokio::spawn(async move {
         match db::db_worker(rx).await {
@@ -102,23 +110,50 @@ async fn main() -> std::io::Result<()> {
         };
     }));
 
-    tasks.push(tokio::spawn(async move {
-        match node_red::proxy::udp_node_red_receiver(node_receiver_tx).await {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Error from Node-RED UDP receiver: {}", err.to_string());
-            }
-        };
-    }));
+    for port in port_range.clone() {
 
-    tasks.push(tokio::spawn(async move {
-        match node_red::proxy::udp_proxy_receiver(proxy_receiver_tx).await {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Error from proxy UDP receiver: {}", err.to_string());
-            }
-        };
-    }));
+        let node_receiver_tx = node_receiver_tx.clone();
+
+        let inbound_port = port_in_from_node_red_base + port;
+        let inbound_socket_address = SocketAddr::from(([127, 0, 0, 1], inbound_port)); 
+        let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
+
+        let outbound_port = port_out_to_proxy_or_output_node_base + port;
+        let outbound_socket_address = SocketAddr::from(([127, 0, 0, 1], outbound_port));
+        let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
+        
+        tasks.push(tokio::spawn(async move {
+            match node_red::proxy::udp_node_red_receiver(node_receiver_tx, inbound_socket, outbound_socket, port_in_from_input_node_base).await {
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("Error from Node-RED UDP receiver: {}", err.to_string());
+                }
+            };
+        }));
+    }
+
+    for port in port_range.clone() {
+
+        let proxy_receiver_tx = proxy_receiver_tx.clone();
+
+        let inbound_port = port_in_from_input_node_base + port;
+        let inbound_socket_address = SocketAddr::from(([127, 0, 0, 1], inbound_port));
+        let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
+
+        let outbound_port = port_out_to_node_red_base + port;
+        let outbound_socket_address = SocketAddr::from(([127, 0, 0, 1], outbound_port));
+        let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
+
+        tasks.push(tokio::spawn(async move {
+            match node_red::proxy::udp_proxy_receiver(proxy_receiver_tx, inbound_socket, outbound_socket, port_node_red_in_base).await {
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("Error from proxy UDP receiver: {}", err.to_string());
+                }
+            };
+        }));
+    }
+
 
     tasks.push(tokio::spawn(async move {
         let test_result = test_latency(10);
@@ -135,9 +170,13 @@ async fn main() -> std::io::Result<()> {
         );
         println!("flows: {}", serde_json::to_string(&flows).unwrap());
 
+        let test_socket = UdpSocket::bind("127.0.0.1:34999").await.unwrap();
+
         if let Err(err) = node_red::proxy::forward_message_to_node_red(
+            &test_socket,
+            port_node_red_in_base + 999,
             json!({
-                "payload": "hi mom",
+                "message": "hi mom",
                 "meta": {
                     "flow_name": "Flow 0",
                     "execution_area": "room0"
