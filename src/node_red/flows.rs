@@ -3,6 +3,8 @@ use serde::{Serialize, Deserialize, ser::SerializeStruct};
 use serde_with::skip_serializing_none;
 use std::{error::Error, fmt};
 
+use crate::NodeRedHttpClient;
+
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FlowNodeResponse {
@@ -112,10 +114,10 @@ impl FlowError {
 
 pub static NODE_RED_BASE_URL: &'static str = "http://localhost:1880";
 
-pub async fn get_all_flows(client: &reqwest::Client) -> Result<FlowsResponse, Box<dyn std::error::Error>> {
+pub async fn get_all_flows(client: &NodeRedHttpClient) -> Result<FlowsResponse, Box<dyn std::error::Error>> {
 
-  let request = client.get(format!("{NODE_RED_BASE_URL}/flows"))
-    .header("Node-RED-API-Version", "v2")
+  let request = client.client
+    .get(client.path_to_url("/flows"))
     .send();
   
   match request.await {
@@ -197,7 +199,7 @@ pub fn get_flow_id_by_name(flows: &Flows, name: &str) -> Option<String> {
     }).map(|(id, _)| id.to_string())
 }
 
-pub async fn update_flow_status(client: &reqwest::Client, id: &str, is_disabled: bool) -> Result<(), FlowError> {
+pub async fn update_flow_status(client: &NodeRedHttpClient, id: &str, is_disabled: bool) -> Result<(), FlowError> {
 
     let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
     let mut flows = flows.flows;
@@ -212,9 +214,8 @@ pub async fn update_flow_status(client: &reqwest::Client, id: &str, is_disabled:
         // println!("updated flow: {}", serde_json::to_string(&flow).unwrap());
 
         // push changes to Node-RED asynchronously
-        let client = reqwest::Client::new();
-        let request = client.put(format!("{NODE_RED_BASE_URL}/flow/{id}", id=id))
-            .header("Node-RED-API-Version", "v2")
+        let request = client.client
+            .put(client.path_to_url(format!("/flow/{id}", id=id).as_str()))
             .json(&flow);
         match request.send().await {
             Ok(response) => {
@@ -241,7 +242,7 @@ fn lookup_node_red_base_url_by_area_name(area_name: &str) -> Result<String, Flow
     }
 }
 
-pub async fn transfer_flow_to_area(client: &reqwest::Client, flow_id: &str, new_area: &str) -> Result<(), FlowError> {
+pub async fn transfer_flow_to_area(client: &NodeRedHttpClient, flow_id: &str, new_area: &str) -> Result<(), FlowError> {
 
     let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
     let mut flows = flows.flows;
@@ -306,9 +307,8 @@ pub async fn transfer_flow_to_area(client: &reqwest::Client, flow_id: &str, new_
         let target_area_node_red_base_url = lookup_node_red_base_url_by_area_name(new_area).unwrap();
 
         // push changes to Node-RED asynchronously
-        let client = reqwest::Client::new();
-        let request = client.post(format!("{target_area_node_red_base_url}/flow"))
-            .header("Node-RED-API-Version", "v2")
+        let request = client.client
+            .post(client.path_to_url("/flow"))
             .json(&flow);
         match request.send().await {
             Ok(response) => {
