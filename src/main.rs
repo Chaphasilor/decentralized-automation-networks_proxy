@@ -199,6 +199,7 @@ async fn main() -> std::io::Result<()> {
         .route("/db/get", get(get_db_handler))
         .route("/db/save", get(save_db_handler))
         .route("/flows/updateStatus", put(update_flow_status_handler))
+        .route("/flows/transfer", post(transfer_flow_handler))
         .with_state(shared_state);
 
     // run our app with hyper
@@ -311,13 +312,13 @@ async fn get_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 #[derive(serde::Deserialize)]
-struct UpdateFlowPayload{
+struct UpdateFlowStatusPayload{
     name: String,
     disabled: bool,
 }
 async fn update_flow_status_handler(
     State(state): State<Arc<AppState>>,
-    payload: Result<Json<UpdateFlowPayload>, JsonRejection>
+    payload: Result<Json<UpdateFlowStatusPayload>, JsonRejection>
 ) -> impl IntoResponse {
 
     match payload {
@@ -340,6 +341,81 @@ async fn update_flow_status_handler(
                         StatusCode::OK,
                         Json(json!({
                             "message": format!("Flow {}", if payload.disabled {"disabled"} else {"enabled"}),
+                        })),
+                    )
+                }
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "message": "Flow not found"
+                    })),
+                )
+            }
+            
+        }
+        Err(JsonRejection::JsonDataError(err)) => {
+            // Couldn't deserialize the body into the target type
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": format!("Missing fields: {}", err.to_string()), 
+                })),
+            )
+        }
+        Err(JsonRejection::JsonSyntaxError(_)) => {
+            // Syntax error in the body
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": "Invalid JSON"
+                })),
+            )
+        }
+        Err(_) => {
+            // `JsonRejection` is marked `#[non_exhaustive]` so match must
+            // include a catch-all case.
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "message": "Unknown error"
+                })),
+            )
+        }
+    }
+    
+}
+
+#[derive(serde::Deserialize)]
+struct TransferFlowPayload{
+    name: String,
+    newArea: String,
+}
+async fn transfer_flow_handler(
+    State(state): State<Arc<AppState>>,
+    payload: Result<Json<TransferFlowPayload>, JsonRejection>
+) -> impl IntoResponse {
+
+    match payload {
+        Ok(payload) => {
+            // We got a valid JSON payload
+
+            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
+            
+            if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
+                if let Err(err) = flows::transfer_flow_to_area(&state.client, &flow_id, &payload.newArea).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "message": format!("Flow could not be transferred to area '{}'", payload.newArea),
+                            "error": err.to_string()
+                        })),
+                    );
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "message": format!("Flow successfully transferred to area '{}'", payload.newArea),
                         })),
                     )
                 }

@@ -233,4 +233,97 @@ pub async fn update_flow_status(client: &reqwest::Client, id: &str, is_disabled:
     }
 }
 
+fn lookup_node_red_base_url_by_area_name(area_name: &str) -> Result<String, FlowError> {
+    match area_name {
+        "test_area" => Ok("http://localhost:1880".to_string()),
+        "base" => Ok("http://localhost:1880".to_string()),
+        _ => Err(FlowError::new(format!("Couldn't find Node-RED base URL for area {}", area_name)))
+    }
+}
 
+pub async fn transfer_flow_to_area(client: &reqwest::Client, flow_id: &str, new_area: &str) -> Result<(), FlowError> {
+
+    let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
+    let mut flows = flows.flows;
+    
+    if let Some(flow) = flows.get_mut(flow_id) {
+
+        if flow.disabled {
+            eprintln!("Flow with id {} is disabled. Please enable it first.", flow_id);
+            return Err(FlowError::new(format!("Flow with id {} is disabled. Please enable it first.", flow_id)));
+        }
+
+        println!("old flow: {}", serde_json::to_string(&flow).unwrap());
+
+        // Node-RED will replace the flow id with a new one, even if an ID was provided: https://nodered.org/docs/api/admin/methods/post/flow/
+        // it will also automatically update all `z` properties of the nodes to the new flow id
+        //TODO try generating a new id to prevent overwriting an existing flow
+
+        //FIXME temporarily rename the flow for testing
+        flow.name = Some(format!("{} (transferred)", flow.name.clone().unwrap_or("".to_string())));
+        
+        // rewrite flow metadata to new area
+        flow.nodes.iter_mut().filter(|node| node._type == "template" && node.field.is_some() && node.field.clone().unwrap() == "meta" ).for_each(|node| {
+            let mut parsed_template = serde_json::from_str::<serde_json::Value>(&node.template.clone().unwrap()).unwrap();
+            parsed_template["execution_area"] = serde_json::Value::String(new_area.to_string());
+            node.template = Some(parsed_template.to_string());
+        });
+
+        // generate a new random id for each node (duplicate ids are not allowed and will result in an error)
+        // a id should look something like this: `eb76079d81f6ce58`
+        //TODO update wires
+        let mut new_node_id_by_old_node_id = HashMap::<String, String>::new();
+        
+        flow.nodes.iter_mut().for_each(|node| {
+            // generate a uuid and take the first 16 hex characters (excluding the `-`)
+            let new_node_id = uuid::Uuid::new_v4().simple().to_string()[..16].to_string();
+            new_node_id_by_old_node_id.insert(node.id.clone(), new_node_id.clone());
+            node.id = new_node_id.clone();
+        });
+
+        // println!("new_node_id_by_old_node_id: {:?}", new_node_id_by_old_node_id);
+
+        // update wires
+        flow.nodes.iter_mut().for_each(|node| {
+            if let Some(wires) = &mut node.wires {
+                node.wires = wires.iter().map(|wire| {
+                    wire.iter().map(|node_id| {
+                        // println!("node_id: {}", node_id);
+                        if let Some(new_node_id) = new_node_id_by_old_node_id.get(node_id) {
+                            // println!("new_node_id: {}", new_node_id);
+                            new_node_id.clone()
+                        } else {
+                            // println!("node id unchanged");
+                            node_id.clone()
+                        }
+                    }).collect::<Vec<String>>()
+                }).collect::<Vec<Vec<String>>>().into()
+            }
+        });
+
+        println!("updated flow: {}", serde_json::to_string(&flow).unwrap());
+
+        let target_area_node_red_base_url = lookup_node_red_base_url_by_area_name(new_area).unwrap();
+
+        // push changes to Node-RED asynchronously
+        let client = reqwest::Client::new();
+        let request = client.post(format!("{target_area_node_red_base_url}/flow"))
+            .header("Node-RED-API-Version", "v2")
+            .json(&flow);
+        match request.send().await {
+            Ok(response) => {
+                update_flow_status(&client, flow_id, true).await?;
+                return Ok(())
+            },
+            Err(err) => {
+                eprintln!("Couldn't update status of flow with id {}: {}\n{:?}", flow_id, err.source().unwrap(), err);
+                return Err(FlowError::new(format!("Couldn't update status of flow with id {}", flow_id)));
+            }
+        }
+        // Ok(())
+        
+    } else {
+        eprintln!("Couldn't find flow with id {}", flow_id);
+        Err(FlowError::new(format!("Couldn't find flow with id {}", flow_id)))
+    }
+}
