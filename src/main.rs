@@ -31,47 +31,54 @@ pub struct NodeRedHttpClient {
 
 impl NodeRedHttpClient {
     fn path_to_url(&self, path: &str) -> String {
-        format!("{}/{}", self.base_url, path)
+        format!("{}{}{}", self.base_url, if path.starts_with('/') { "" } else { "/" }, path)
+    }
+    fn path_to_url_with_base_url(&self, path: &str, base_url: &str) -> String {
+        format!("{}{}{}", base_url, if path.starts_with('/') { "" } else { "/" }, path)
     }
 }
 
 struct AppState {
     tx: mpsc::Sender<Message>,
     client: NodeRedHttpClient,
+    config: Config,
 }
 
-#[derive(serde::Deserialize, Debug)]
-struct Area {
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct Area {
     name: String,
     proxy_ip: String,
+    proxy_webserver_port: u16,
+    node_red_base_url: String,
 }
 
-#[derive(serde::Deserialize, Debug)]
-struct InputNode {
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct InputNode {
     area: String,
     name: String,
     ip: String,
     port: u16,
 }
 
-#[derive(serde::Deserialize, Debug)]
-struct PortConfig {
-    port_in_from_input_node_base: u16, // used by proxies and output nodes as inbound port
-    port_out_to_node_red_base: u16,
-    port_node_red_in_base: u16, // only used as a target
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct PortConfig {
+    pub port_in_from_input_node_base: u16, // used by proxies and output nodes as inbound port
+    pub port_out_to_node_red_base: u16,
+    pub port_node_red_in_base: u16, // only used as a target
     port_node_red_out_base: u16, // only used in Node-RED
-    port_in_from_node_red_base: u16,
-    port_out_to_proxy_or_output_node_base: u16,
-    port_range_limit: u16,
+    pub port_in_from_node_red_base: u16,
+    pub port_out_to_proxy_or_output_node_base: u16,
+    pub port_range_limit: u16,
 }
 
-#[derive(serde::Deserialize, Debug)]
-struct Config {
-    area: String,
-    node_red_base_url: String,
-    ports: PortConfig,
-    areas: Option<Vec<Area>>,
-    input_nodes: Option<Vec<InputNode>>,
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct Config {
+    pub area: String,
+    pub webserver_port: u16,
+    pub node_red_base_url: String,
+    pub ports: PortConfig,
+    pub areas: Option<Vec<Area>>,
+    pub input_nodes: Option<Vec<InputNode>>,
 }
 
 /// A management server and proxy for Node-RED
@@ -114,6 +121,7 @@ async fn main() -> std::io::Result<()> {
     let shared_state = Arc::new(AppState {
         tx: shared_state_tx,
         client: node_red_http_client.clone(),
+        config: config.clone(),
     });
 
     let port_range = 1..=config.ports.port_range_limit;
@@ -213,6 +221,7 @@ async fn main() -> std::io::Result<()> {
 
     // set up a simple HTTP web server for controlling the proxy
     let app = Router::new()
+        .route("/proxy/nodeRedBaseUrl", get(proxy_node_red_base_url_handler))
         .route("/db/log", get(log_db_handler))
         .route("/db/get", get(get_db_handler))
         .route("/db/save", get(save_db_handler))
@@ -222,7 +231,7 @@ async fn main() -> std::io::Result<()> {
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr = SocketAddr::from(([127, 0, 0, 1], config.webserver_port));
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
@@ -241,6 +250,13 @@ fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
     println!("config: {:?}", config);
 
     config.map_err(|err| err.into())
+}
+
+async fn proxy_node_red_base_url_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(json!(state.client.base_url)),
+    )
 }
 
 async fn log_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -431,7 +447,7 @@ async fn transfer_flow_handler(
             let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
             
             if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
-                if let Err(err) = flows::transfer_flow_to_area(&state.client, &flow_id, &payload.newArea).await {
+                if let Err(err) = flows::transfer_flow_to_area(&state.config, &state.client, &flow_id, &payload.newArea).await {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
