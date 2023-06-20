@@ -102,7 +102,7 @@ pub async fn udp_node_red_receiver(tx: mpsc::Sender<Message>, inbound_socket: Ud
 
         if let Ok(message) = message {
             let message = message.trim_matches(char::from(0)); // trim any NULL characters that are left over from the buffer
-            println!("received message from Node-RED: {message}");
+            // println!("received message from Node-RED: {message}");
 
             let message_json: serde_json::Value = serde_json::from_str(message).unwrap();
 
@@ -132,7 +132,7 @@ pub async fn udp_node_red_receiver(tx: mpsc::Sender<Message>, inbound_socket: Ud
             let ip: Vec<u8> = ip_string.split(".").map(|x| x.parse::<u8>().unwrap()).collect();
             let destination = SocketAddr::from(([ip[0], ip[1], ip[2], ip[3]], destination_port));
 
-            println!("destination: {destination}", destination=destination.to_string());
+            // println!("destination: {destination}", destination=destination.to_string());
 
             if let Err(err) = outbound_socket.send_to(message_json.to_string().as_bytes(), destination).await {
                 eprintln!("couldn't send message to destination: {}", err.to_string());
