@@ -1,0 +1,10 @@
+area: base
+node_red_base_url: http://localhost:1880
+ports:
+  port_in_from_input_node_base: 34000
+  port_out_to_node_red_base: 35000
+  port_node_red_in_base: 36000
+  port_node_red_out_base: 39000
+  port_in_from_node_red_base: 37000
+  port_out_to_proxy_or_output_node_base: 38000
+  port_range_limit: 10

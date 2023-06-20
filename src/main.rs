@@ -8,6 +8,7 @@ use axum::{
 use db::{Event, Message};
 use futures::{future, Future};
 use serde_json::json;
+use serde_yaml;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -15,6 +16,7 @@ use std::time::{Duration, SystemTime};
 use std::{error::Error, fmt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::{net::UdpSocket, task};
+use clap::Parser;
 
 use crate::node_red::flows;
 
@@ -75,8 +77,57 @@ struct AppState {
     client: reqwest::Client,
 }
 
+#[derive(serde::Deserialize, Debug)]
+struct Area {
+    name: String,
+    proxy_ip: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct InputNode {
+    area: String,
+    name: String,
+    ip: String,
+    port: u16,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct PortConfig {
+    port_in_from_input_node_base: u16, // used by proxies and output nodes as inbound port
+    port_out_to_node_red_base: u16,
+    port_node_red_in_base: u16, // only used as a target
+    port_node_red_out_base: u16, // only used in Node-RED
+    port_in_from_node_red_base: u16,
+    port_out_to_proxy_or_output_node_base: u16,
+    port_range_limit: u16,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct Config {
+    area: String,
+    node_red_base_url: String,
+    ports: PortConfig,
+    areas: Option<Vec<Area>>,
+    input_nodes: Option<Vec<InputNode>>,
+}
+
+/// A management server and proxy for Node-RED
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Relative path to the configuration file
+    #[arg(short, long)]
+    config: String,
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+
+    let args = Args::parse();
+
+    let config = load_config(args.config.as_str()).unwrap();
+    println!("Proxy for area '{}' started!\nNode-RED instance running at {}", config.area, config.node_red_base_url);
+    
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = vec![];
 
     let client = reqwest::Client::new();
@@ -92,13 +143,7 @@ async fn main() -> std::io::Result<()> {
         client: client.clone(),
     });
 
-    let port_in_from_input_node_base = 34000; // used by proxies and output nodes as inbound port
-    let port_out_to_node_red_base = 35000;
-    let port_node_red_in_base = 36000; // only used as a target
-    let port_node_red_out_base = 39000; // only used in Node-RED
-    let port_in_from_node_red_base = 37000;
-    let port_out_to_proxy_or_output_node_base = 38000;
-    let port_range = 1..=10;
+    let port_range = 1..=config.ports.port_range_limit;
 
     // db
     tasks.push(tokio::spawn(async move {
@@ -114,16 +159,16 @@ async fn main() -> std::io::Result<()> {
 
         let node_receiver_tx = node_receiver_tx.clone();
 
-        let inbound_port = port_in_from_node_red_base + port;
+        let inbound_port = config.ports.port_in_from_node_red_base + port;
         let inbound_socket_address = SocketAddr::from(([127, 0, 0, 1], inbound_port)); 
         let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
 
-        let outbound_port = port_out_to_proxy_or_output_node_base + port;
+        let outbound_port = config.ports.port_out_to_proxy_or_output_node_base + port;
         let outbound_socket_address = SocketAddr::from(([127, 0, 0, 1], outbound_port));
         let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
         
         tasks.push(tokio::spawn(async move {
-            match node_red::proxy::udp_node_red_receiver(node_receiver_tx, inbound_socket, outbound_socket, port_in_from_input_node_base).await {
+            match node_red::proxy::udp_node_red_receiver(node_receiver_tx, inbound_socket, outbound_socket, config.ports.port_in_from_input_node_base).await {
                 Ok(_) => {}
                 Err(err) => {
                     eprintln!("Error from Node-RED UDP receiver: {}", err.to_string());
@@ -136,16 +181,16 @@ async fn main() -> std::io::Result<()> {
 
         let proxy_receiver_tx = proxy_receiver_tx.clone();
 
-        let inbound_port = port_in_from_input_node_base + port;
+        let inbound_port = config.ports.port_in_from_input_node_base + port;
         let inbound_socket_address = SocketAddr::from(([127, 0, 0, 1], inbound_port));
         let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
 
-        let outbound_port = port_out_to_node_red_base + port;
+        let outbound_port = config.ports.port_out_to_node_red_base + port;
         let outbound_socket_address = SocketAddr::from(([127, 0, 0, 1], outbound_port));
         let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
 
         tasks.push(tokio::spawn(async move {
-            match node_red::proxy::udp_proxy_receiver(proxy_receiver_tx, inbound_socket, outbound_socket, port_node_red_in_base).await {
+            match node_red::proxy::udp_proxy_receiver(proxy_receiver_tx, inbound_socket, outbound_socket, config.ports.port_node_red_in_base).await {
                 Ok(_) => {}
                 Err(err) => {
                     eprintln!("Error from proxy UDP receiver: {}", err.to_string());
@@ -174,7 +219,7 @@ async fn main() -> std::io::Result<()> {
 
         if let Err(err) = node_red::proxy::forward_message_to_node_red(
             &test_socket,
-            port_node_red_in_base + 999,
+            config.ports.port_node_red_in_base + 999,
             json!({
                 "message": "hi mom",
                 "meta": {
@@ -213,6 +258,16 @@ async fn main() -> std::io::Result<()> {
     future::join_all(tasks).await;
 
     Ok(())
+}
+
+fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
+    let config = std::fs::read_to_string(path)?;
+
+    let config = serde_yaml::from_str::<Config>(&config);
+
+    println!("config: {:?}", config);
+
+    config.map_err(|err| err.into())
 }
 
 async fn log_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
