@@ -7,15 +7,15 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'demo-udp-sender'",
+      "name": "Debug executable 'decentralized-automation-networks_proxy'",
       "cargo": {
         "args": [
           "build",
-          "--bin=demo-udp-sender",
-          "--package=demo-udp-sender"
+          "--bin=decentralized-automation-networks_proxy",
+          "--package=decentralized-automation-networks_proxy"
         ],
         "filter": {
-          "name": "demo-udp-sender",
+          "name": "decentralized-automation-networks_proxy",
           "kind": "bin"
         }
       },
@@ -25,16 +25,16 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in executable 'demo-udp-sender'",
+      "name": "Debug unit tests in executable 'decentralized-automation-networks_proxy'",
       "cargo": {
         "args": [
           "test",
           "--no-run",
-          "--bin=demo-udp-sender",
-          "--package=demo-udp-sender"
+          "--bin=decentralized-automation-networks_proxy",
+          "--package=decentralized-automation-networks_proxy"
         ],
         "filter": {
-          "name": "demo-udp-sender",
+          "name": "decentralized-automation-networks_proxy",
           "kind": "bin"
         }
       },

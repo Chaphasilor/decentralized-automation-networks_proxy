@@ -184,7 +184,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "demo-udp-sender"
+name = "decentralized-automation-networks_proxy"
 version = "0.1.0"
 dependencies = [
  "axum",
