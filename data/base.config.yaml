@@ -1,4 +1,5 @@
 area: base
+webserver_port: 3000
 node_red_base_url: http://localhost:1880
 ports:
   port_in_from_input_node_base: 34000
@@ -8,3 +9,8 @@ ports:
   port_in_from_node_red_base: 37000
   port_out_to_proxy_or_output_node_base: 38000
   port_range_limit: 10
+areas:
+  - name: test_area
+    proxy_ip: 127.0.0.1
+    proxy_webserver_port: 3001
+    node_red_base_url: http://localhost:1880

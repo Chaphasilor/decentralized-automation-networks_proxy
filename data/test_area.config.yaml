@@ -1,0 +1,11 @@
+area: test_area
+webserver_port: 3001
+node_red_base_url: http://localhost:1880
+ports:
+  port_in_from_input_node_base: 44000
+  port_out_to_node_red_base: 45000
+  port_node_red_in_base: 46000
+  port_node_red_out_base: 49000
+  port_in_from_node_red_base: 47000
+  port_out_to_proxy_or_output_node_base: 48000
+  port_range_limit: 10

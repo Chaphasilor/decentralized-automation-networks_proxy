@@ -3,7 +3,7 @@ use serde::{Serialize, Deserialize, ser::SerializeStruct};
 use serde_with::skip_serializing_none;
 use std::{error::Error, fmt};
 
-use crate::NodeRedHttpClient;
+use crate::{NodeRedHttpClient, Config};
 
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -115,6 +115,8 @@ impl FlowError {
 pub static NODE_RED_BASE_URL: &'static str = "http://localhost:1880";
 
 pub async fn get_all_flows(client: &NodeRedHttpClient) -> Result<FlowsResponse, Box<dyn std::error::Error>> {
+
+    println!("{}", client.path_to_url("/flows"));
 
   let request = client.client
     .get(client.path_to_url("/flows"))
@@ -234,15 +236,18 @@ pub async fn update_flow_status(client: &NodeRedHttpClient, id: &str, is_disable
     }
 }
 
-fn lookup_node_red_base_url_by_area_name(area_name: &str) -> Result<String, FlowError> {
-    match area_name {
-        "test_area" => Ok("http://localhost:1880".to_string()),
-        "base" => Ok("http://localhost:1880".to_string()),
-        _ => Err(FlowError::new(format!("Couldn't find Node-RED base URL for area {}", area_name)))
+fn lookup_node_red_base_url_by_area_name(config: &Config, area_name: &str) -> Result<String, FlowError> {
+    if let Some(areas) = config.areas.as_ref() {
+        for area in areas {
+            if area.name == area_name {
+                return Ok(area.node_red_base_url.clone());
+            }
+        }
     }
+    return Err(FlowError::new(format!("Couldn't find Node-RED base URL for area {}", area_name)))
 }
 
-pub async fn transfer_flow_to_area(client: &NodeRedHttpClient, flow_id: &str, new_area: &str) -> Result<(), FlowError> {
+pub async fn transfer_flow_to_area(config: &Config, client: &NodeRedHttpClient, flow_id: &str, new_area: &str) -> Result<(), FlowError> {
 
     let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
     let mut flows = flows.flows;
@@ -304,11 +309,11 @@ pub async fn transfer_flow_to_area(client: &NodeRedHttpClient, flow_id: &str, ne
 
         println!("updated flow: {}", serde_json::to_string(&flow).unwrap());
 
-        let target_area_node_red_base_url = lookup_node_red_base_url_by_area_name(new_area).unwrap();
+        let target_area_node_red_base_url = lookup_node_red_base_url_by_area_name(config, new_area).unwrap();
 
         // push changes to Node-RED asynchronously
         let request = client.client
-            .post(client.path_to_url("/flow"))
+            .post(client.path_to_url_with_base_url("/flow", target_area_node_red_base_url.as_str()))
             .json(&flow);
         match request.send().await {
             Ok(response) => {
