@@ -187,7 +187,7 @@ pub async fn udp_proxy_receiver(tx: mpsc::Sender<Message>, inbound_socket: UdpSo
 
         if let Ok(message) = message {
             let message = message.trim_matches(char::from(0)); // trim any NULL characters that are left over from the buffer
-            // println!("received message from sensor or proxy: '{message}'");
+            println!("received message from sensor or proxy: '{message}'");
             let message_json: serde_json::Value = serde_json::from_str(message).unwrap();
 
             let destination_port = destination_port_base + (reception_port % 1000);
