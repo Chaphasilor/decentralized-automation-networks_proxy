@@ -48,14 +48,16 @@ struct AppState {
 pub struct Area {
     name: String,
     proxy_ip: String,
+    proxy_port_base: u16,
     proxy_webserver_port: u16,
     node_red_base_url: String,
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct InputNode {
-    area: String,
     name: String,
+    area: String,
+    flow: String,
     ip: String,
     port: u16,
 }
@@ -191,28 +193,28 @@ async fn main() -> std::io::Result<()> {
 
         latency_test::submit_test_result(&node_red_http_client, test_result).await.unwrap();
 
-        let flows = node_red::flows::convert_flows_response_to_flows(
-            node_red::flows::get_all_flows(&node_red_http_client).await.unwrap(),
-        );
-        println!("flows: {}", serde_json::to_string(&flows).unwrap());
+        // let flows = node_red::flows::convert_flows_response_to_flows(
+        //     node_red::flows::get_all_flows(&node_red_http_client).await.unwrap(),
+        // );
+        // println!("flows: {}", serde_json::to_string(&flows).unwrap());
 
-        let test_socket = UdpSocket::bind("127.0.0.1:34999").await.unwrap();
+        // let test_socket = UdpSocket::bind("127.0.0.1:34999").await.unwrap();
 
-        if let Err(err) = node_red::proxy::forward_message_to_node_red(
-            &test_socket,
-            config.ports.port_node_red_in_base + 999,
-            json!({
-                "message": "hi mom",
-                "meta": {
-                    "flow_name": "Flow 0",
-                    "execution_area": "room0"
-                }
-            }),
-            Some(Duration::from_millis(250)),
-            local_tx.clone(),
-        ).await {
-            eprintln!("Error while forwarding message: {}", err.to_string());
-        };
+        // if let Err(err) = node_red::proxy::forward_message_to_node_red(
+        //     &test_socket,
+        //     config.ports.port_node_red_in_base + 999,
+        //     json!({
+        //         "message": "hi mom",
+        //         "meta": {
+        //             "flow_name": "Flow 0",
+        //             "execution_area": "room0"
+        //         }
+        //     }),
+        //     Some(Duration::from_millis(250)),
+        //     local_tx.clone(),
+        // ).await {
+        //     eprintln!("Error while forwarding message: {}", err.to_string());
+        // };
     }));
 
     tasks.push(task::spawn_blocking(move || {

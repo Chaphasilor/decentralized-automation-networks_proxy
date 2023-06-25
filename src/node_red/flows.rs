@@ -1,6 +1,7 @@
-use std::collections::{HashMap};
+use std::{collections::{HashMap}, net::SocketAddr, time::Duration};
 use serde::{Serialize, Deserialize, ser::SerializeStruct};
 use serde_with::skip_serializing_none;
+use tokio::time::timeout;
 use std::{error::Error, fmt};
 
 use crate::{NodeRedHttpClient, Config};
@@ -44,6 +45,7 @@ pub struct FlowNodeResponse {
     template: Option<String>,
     iface: Option<String>,
     port: Option<String>,
+    outport: Option<String>,
     ipv: Option<String>,
     multicast: Option<String>,
     group: Option<String>,
@@ -247,85 +249,160 @@ fn lookup_node_red_base_url_by_area_name(config: &Config, area_name: &str) -> Re
     return Err(FlowError::new(format!("Couldn't find Node-RED base URL for area {}", area_name)))
 }
 
+fn lookup_proxy_ip_and_port_base_by_area_name(config: &Config, area_name: &str) -> Result<(String, u16), FlowError> {
+    if let Some(areas) = config.areas.as_ref() {
+        for area in areas {
+            if area.name == area_name {
+                return Ok((area.proxy_ip.clone(), area.proxy_port_base));
+            }
+        }
+    }
+    return Err(FlowError::new(format!("Couldn't find proxy base URL for area {}", area_name)))
+}
+
+
 pub async fn transfer_flow_to_area(config: &Config, client: &NodeRedHttpClient, flow_id: &str, new_area: &str) -> Result<(), FlowError> {
 
     let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
     let mut flows = flows.flows;
     
     if let Some(flow) = flows.get_mut(flow_id) {
+        if let Ok((proxy_ip, proxy_port_base)) = lookup_proxy_ip_and_port_base_by_area_name(config, new_area) {
 
-        if flow.disabled {
-            eprintln!("Flow with id {} is disabled. Please enable it first.", flow_id);
-            return Err(FlowError::new(format!("Flow with id {} is disabled. Please enable it first.", flow_id)));
-        }
+            if flow.disabled {
+                eprintln!("Flow with id {} is disabled. Please enable it first.", flow_id);
+                return Err(FlowError::new(format!("Flow with id {} is disabled. Please enable it first.", flow_id)));
+            }
 
-        println!("old flow: {}", serde_json::to_string(&flow).unwrap());
+            println!("old flow: {}", serde_json::to_string(&flow).unwrap());
 
-        // Node-RED will replace the flow id with a new one, even if an ID was provided: https://nodered.org/docs/api/admin/methods/post/flow/
-        // it will also automatically update all `z` properties of the nodes to the new flow id
-        //TODO try generating a new id to prevent overwriting an existing flow
+            // Node-RED will replace the flow id with a new one, even if an ID was provided: https://nodered.org/docs/api/admin/methods/post/flow/
+            // it will also automatically update all `z` properties of the nodes to the new flow id
 
-        //FIXME temporarily rename the flow for testing
-        flow.name = Some(format!("{} (transferred)", flow.name.clone().unwrap_or("".to_string())));
-        
-        // rewrite flow metadata to new area
-        flow.nodes.iter_mut().filter(|node| node._type == "template" && node.field.is_some() && node.field.clone().unwrap() == "meta" ).for_each(|node| {
-            let mut parsed_template = serde_json::from_str::<serde_json::Value>(&node.template.clone().unwrap()).unwrap();
-            parsed_template["execution_area"] = serde_json::Value::String(new_area.to_string());
-            node.template = Some(parsed_template.to_string());
-        });
+            let original_flow_name = flow.name.clone().unwrap_or("".to_string());
+            flow.name = Some(format!("{} (transferred)", flow.name.clone().unwrap_or("".to_string())));
+            
+            // rewrite flow metadata to new area
+            flow.nodes.iter_mut().filter(|node| node._type == "template" && node.field.is_some() && node.field.clone().unwrap() == "meta" ).for_each(|node| {
+                let mut parsed_template = serde_json::from_str::<serde_json::Value>(&node.template.clone().unwrap()).unwrap();
+                parsed_template["execution_area"] = serde_json::Value::String(new_area.to_string());
+                node.template = Some(parsed_template.to_string());
+            });
 
-        // generate a new random id for each node (duplicate ids are not allowed and will result in an error)
-        // a id should look something like this: `eb76079d81f6ce58`
-        //TODO update wires
-        let mut new_node_id_by_old_node_id = HashMap::<String, String>::new();
-        
-        flow.nodes.iter_mut().for_each(|node| {
-            // generate a uuid and take the first 16 hex characters (excluding the `-`)
-            let new_node_id = uuid::Uuid::new_v4().simple().to_string()[..16].to_string();
-            new_node_id_by_old_node_id.insert(node.id.clone(), new_node_id.clone());
-            node.id = new_node_id.clone();
-        });
+            // generate a new random id for each node (duplicate ids are not allowed and will result in an error)
+            // a id should look something like this: `eb76079d81f6ce58`
+            let mut new_node_id_by_old_node_id = HashMap::<String, String>::new();
+            
+            flow.nodes.iter_mut().for_each(|node| {
+                // generate a uuid and take the first 16 hex characters (excluding the `-`)
+                let new_node_id = uuid::Uuid::new_v4().simple().to_string()[..16].to_string();
+                new_node_id_by_old_node_id.insert(node.id.clone(), new_node_id.clone());
+                node.id = new_node_id.clone();
+            });
 
-        // println!("new_node_id_by_old_node_id: {:?}", new_node_id_by_old_node_id);
+            // println!("new_node_id_by_old_node_id: {:?}", new_node_id_by_old_node_id);
 
-        // update wires
-        flow.nodes.iter_mut().for_each(|node| {
-            if let Some(wires) = &mut node.wires {
-                node.wires = wires.iter().map(|wire| {
-                    wire.iter().map(|node_id| {
-                        // println!("node_id: {}", node_id);
-                        if let Some(new_node_id) = new_node_id_by_old_node_id.get(node_id) {
-                            // println!("new_node_id: {}", new_node_id);
-                            new_node_id.clone()
-                        } else {
-                            // println!("node id unchanged");
-                            node_id.clone()
+            // update wires
+            flow.nodes.iter_mut().for_each(|node| {
+                if let Some(wires) = &mut node.wires {
+                    node.wires = wires.iter().map(|wire| {
+                        wire.iter().map(|node_id| {
+                            // println!("node_id: {}", node_id);
+                            if let Some(new_node_id) = new_node_id_by_old_node_id.get(node_id) {
+                                // println!("new_node_id: {}", new_node_id);
+                                new_node_id.clone()
+                            } else {
+                                // println!("node id unchanged");
+                                node_id.clone()
+                            }
+                        }).collect::<Vec<String>>()
+                    }).collect::<Vec<Vec<String>>>().into()
+                }
+            });
+
+            // update ports to new base port
+            // nodes to update: udp in, udp out
+            flow.nodes.iter_mut().for_each(|node| {
+                match node._type.as_str() {
+                    "udp in" => {
+                        if let Some(port) = &mut node.port {
+                            *port = format!("{}", proxy_port_base + (port.parse::<u32>().unwrap() % 10000) as u16);
                         }
-                    }).collect::<Vec<String>>()
-                }).collect::<Vec<Vec<String>>>().into()
+                    },
+                    "udp out" => {
+                        if let Some(port) = &mut node.port {
+                            *port = format!("{}", proxy_port_base + (port.parse::<u32>().unwrap() % 10000) as u16);
+                        }
+                        if let Some(outport) = &mut node.outport {
+                            *outport = format!("{}", proxy_port_base + (outport.parse::<u32>().unwrap() % 10000) as u16);
+                        }
+                    },
+                    _ => {}
+                }
+            });
+
+            println!("updated flow: {}", serde_json::to_string(&flow).unwrap());
+
+            let target_area_node_red_base_url = lookup_node_red_base_url_by_area_name(config, new_area).unwrap();
+
+            // push changes to Node-RED asynchronously
+            let request = client.client
+                .post(client.path_to_url_with_base_url("/flow", target_area_node_red_base_url.as_str()))
+                .json(&flow);
+            match request.send().await {
+                Ok(response) => {
+
+                    // flow successfully created in new area, now update the input node's target
+                    if config.input_nodes.is_some() {
+                        if let Some(input_node) = config.input_nodes.as_ref().unwrap().iter().find(|input_node| input_node.flow == original_flow_name) {
+                            // send udp message to input node to update target
+                            let socket = tokio::net::UdpSocket::bind("127.0.0.1:33000").await.unwrap();
+                            let ip_vec: Vec<u8> = input_node.ip.split(".").map(|x| x.parse::<u8>().unwrap()).collect();
+                            let input_node_address = SocketAddr::from(([ip_vec[0], ip_vec[1], ip_vec[2], ip_vec[3]], input_node.port)); 
+                            // socket.connect(input_node_address).unwrap();
+                            // socket.set_read_timeout(Some(Duration::from_millis(10000))).unwrap();
+                            let json = serde_json::json!({
+                                "type": "updateTarget",
+                                "target": proxy_ip,
+                                "target_port_base": proxy_port_base
+                            });
+                            socket.send_to(json.to_string().as_bytes(), input_node_address).await.unwrap();
+
+                            // wait for ACK to arrive before continuing
+                            let mut buf = [0; 1024];
+                            let timeout_duration = 1000;
+                            if let Err(_) = timeout(Duration::from_millis(timeout_duration), socket.recv_from(&mut buf)).await {
+                                eprintln!("No ACK received from input node within {}ms", timeout_duration);
+                                return Err(FlowError::new(format!("ACK from input node timed out. Flow still running in old area.")));
+                            }
+
+                            println!("ACK received, disabling flow in old area");
+                            update_flow_status(&client, flow_id, true).await?;
+
+                        } else {
+                            eprintln!("Couldn't find input node for flow {}", original_flow_name);
+                            return Err(FlowError::new(format!("Couldn't find input node for flow {}", original_flow_name)));
+                        }
+                    }
+
+                    return Ok(());
+                    
+                },
+                Err(err) => {
+                    eprintln!("Couldn't update status of flow with id {}: {:?}", flow_id, err);
+                    return Err(FlowError::new(format!("Couldn't update status of flow with id {}", flow_id)));
+                }
             }
-        });
+            // Ok(())
 
-        println!("updated flow: {}", serde_json::to_string(&flow).unwrap());
+        } else {
 
-        let target_area_node_red_base_url = lookup_node_red_base_url_by_area_name(config, new_area).unwrap();
+            eprintln!("Couldn't find proxy IP for area {}", new_area);
 
-        // push changes to Node-RED asynchronously
-        let request = client.client
-            .post(client.path_to_url_with_base_url("/flow", target_area_node_red_base_url.as_str()))
-            .json(&flow);
-        match request.send().await {
-            Ok(response) => {
-                update_flow_status(&client, flow_id, true).await?;
-                return Ok(())
-            },
-            Err(err) => {
-                eprintln!("Couldn't update status of flow with id {}: {}\n{:?}", flow_id, err.source().unwrap(), err);
-                return Err(FlowError::new(format!("Couldn't update status of flow with id {}", flow_id)));
-            }
+            return Err(FlowError::new(format!("Couldn't find proxy IP for area {}", new_area)));
+
         }
-        // Ok(())
+
         
     } else {
         eprintln!("Couldn't find flow with id {}", flow_id);

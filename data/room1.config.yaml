@@ -1,4 +1,4 @@
-area: test_area
+area: room1
 webserver_port: 3001
 node_red_base_url: http://localhost:1880
 ports:
