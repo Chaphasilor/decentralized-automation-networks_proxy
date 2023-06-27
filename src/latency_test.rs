@@ -121,7 +121,7 @@ fn test_latency_once(timeout: Option<Duration>) -> Result<LatencyTestResult, Lat
       let time = start.duration_since(std::time::UNIX_EPOCH).expect("Couldn't get system time");
       let mut buf = (time.as_micros() as u64).to_be_bytes();
 
-      let destination = SocketAddr::from(([127, 0, 0, 1], 34001));
+      let destination = SocketAddr::from(([127, 0, 0, 1], 30001));
 
       socket.send_to(&buf, destination)?;
 
