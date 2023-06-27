@@ -114,11 +114,7 @@ impl FlowError {
     }
 }
 
-pub static NODE_RED_BASE_URL: &'static str = "http://localhost:1880";
-
 pub async fn get_all_flows(client: &NodeRedHttpClient) -> Result<FlowsResponse, Box<dyn std::error::Error>> {
-
-    println!("{}", client.path_to_url("/flows"));
 
   let request = client.client
     .get(client.path_to_url("/flows"))
@@ -126,7 +122,6 @@ pub async fn get_all_flows(client: &NodeRedHttpClient) -> Result<FlowsResponse, 
   
   match request.await {
       Ok(response) => {
-          println!("status: {}", response.status());
           match response.json::<FlowsResponse>().await {
             Ok(flows_response) => {
                 return Ok(flows_response);
