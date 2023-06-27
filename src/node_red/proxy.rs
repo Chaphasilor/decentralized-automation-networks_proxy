@@ -53,7 +53,7 @@ pub async fn forward_message_to_node_red(
     {
         // socket.set_read_timeout(timeout).expect("Couldn't set socket timeout");
 
-        let destination = SocketAddr::from(([127, 0, 0, 1], destination_port));
+        let destination = SocketAddr::from(([0, 0, 0, 0], destination_port));
 
         if let Some(message) = msg["message"].as_str() {
         

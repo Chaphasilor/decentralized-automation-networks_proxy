@@ -145,11 +145,11 @@ async fn main() -> std::io::Result<()> {
         let node_receiver_tx = node_receiver_tx.clone();
 
         let inbound_port = config.ports.port_in_from_node_red_base + port;
-        let inbound_socket_address = SocketAddr::from(([127, 0, 0, 1], inbound_port)); 
+        let inbound_socket_address = SocketAddr::from(([0, 0, 0, 0], inbound_port)); 
         let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
 
         let outbound_port = config.ports.port_out_to_proxy_or_output_node_base + port;
-        let outbound_socket_address = SocketAddr::from(([127, 0, 0, 1], outbound_port));
+        let outbound_socket_address = SocketAddr::from(([0, 0, 0, 0], outbound_port));
         let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
         
         tasks.push(tokio::spawn(async move {
@@ -167,11 +167,11 @@ async fn main() -> std::io::Result<()> {
         let proxy_receiver_tx = proxy_receiver_tx.clone();
 
         let inbound_port = config.ports.port_in_from_input_node_base + port;
-        let inbound_socket_address = SocketAddr::from(([127, 0, 0, 1], inbound_port));
+        let inbound_socket_address = SocketAddr::from(([0, 0, 0, 0], inbound_port));
         let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
 
         let outbound_port = config.ports.port_out_to_node_red_base + port;
-        let outbound_socket_address = SocketAddr::from(([127, 0, 0, 1], outbound_port));
+        let outbound_socket_address = SocketAddr::from(([0, 0, 0, 0], outbound_port));
         let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
 
         tasks.push(tokio::spawn(async move {
@@ -200,7 +200,7 @@ async fn main() -> std::io::Result<()> {
         // );
         // println!("flows: {}", serde_json::to_string(&flows).unwrap());
 
-        // let test_socket = UdpSocket::bind("127.0.0.1:34999").await.unwrap();
+        // let test_socket = UdpSocket::bind("0.0.0.0:34999").await.unwrap();
 
         // if let Err(err) = node_red::proxy::forward_message_to_node_red(
         //     &test_socket,
@@ -237,7 +237,7 @@ async fn main() -> std::io::Result<()> {
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
-    let addr = SocketAddr::from(([127, 0, 0, 1], config.webserver_port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.webserver_port));
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await

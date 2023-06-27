@@ -379,7 +379,7 @@ pub async fn transfer_flow_to_area(config: &Config, client: &NodeRedHttpClient, 
                         //TODO find node based on Node-RED input port, mapped to input node port in config?
                         if let Some(input_node) = config.input_nodes.as_ref().unwrap().iter().find(|input_node| input_node.flow == original_flow_name) {
                             // send udp message to input node to update target
-                            let socket = tokio::net::UdpSocket::bind("127.0.0.1:33000").await.unwrap();
+                            let socket = tokio::net::UdpSocket::bind("0.0.0.0:33000").await.unwrap();
                             let ip_vec: Vec<u8> = input_node.ip.split(".").map(|x| x.parse::<u8>().unwrap()).collect();
                             let input_node_address = SocketAddr::from(([ip_vec[0], ip_vec[1], ip_vec[2], ip_vec[3]], input_node.port)); 
                             // socket.connect(input_node_address).unwrap();
@@ -455,7 +455,7 @@ pub async fn untransfer_flow_from_area(config: &Config, client: &NodeRedHttpClie
                         //TODO find node based on Node-RED input port, mapped to input node port in config?
                         if let Some(input_node) = config.input_nodes.as_ref().unwrap().iter().find(|input_node| input_node.flow == original_flow_name) {
                             // send udp message to input node to update target
-                            let socket = tokio::net::UdpSocket::bind("127.0.0.1:33000").await.unwrap();
+                            let socket = tokio::net::UdpSocket::bind("0.0.0.0:33000").await.unwrap();
                             let ip_vec: Vec<u8> = input_node.ip.split(".").map(|x| x.parse::<u8>().unwrap()).collect();
                             let input_node_address = SocketAddr::from(([ip_vec[0], ip_vec[1], ip_vec[2], ip_vec[3]], input_node.port)); 
                             // socket.connect(input_node_address).unwrap();
