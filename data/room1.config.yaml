@@ -1,5 +1,6 @@
 area: room1
 webserver_port: 3001
+port_base: 40000
 node_red_base_url: http://localhost:1880
 ports:
   port_in_from_input_node_base: 43000

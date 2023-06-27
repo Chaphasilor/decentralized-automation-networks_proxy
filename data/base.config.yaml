@@ -1,5 +1,6 @@
 area: base
 webserver_port: 3000
+port_base: 30000
 node_red_base_url: http://localhost:1880
 ports:
   port_in_from_input_node_base: 33000

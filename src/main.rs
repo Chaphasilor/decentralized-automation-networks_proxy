@@ -1,8 +1,8 @@
 use axum::{
-    extract::{State, Json, rejection::JsonRejection},
+    extract::{State, Json, rejection::JsonRejection, Path},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{get, post, put, delete},
     Router,
 };
 use db::{Event, Message};
@@ -77,6 +77,7 @@ pub struct PortConfig {
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
     pub area: String,
+    pub port_base: u16,
     pub webserver_port: u16,
     pub node_red_base_url: String,
     pub ports: PortConfig,
@@ -229,7 +230,9 @@ async fn main() -> std::io::Result<()> {
         .route("/db/get", get(get_db_handler))
         .route("/db/save", get(save_db_handler))
         .route("/flows/updateStatus", put(update_flow_status_handler))
+        .route("/flow/:flow_name", delete(delete_flow_handler))
         .route("/flows/transfer", post(transfer_flow_handler))
+        .route("/flows/transfer", delete(untransfer_flow_handler))
         .with_state(shared_state);
 
     // run our app with hyper
@@ -501,6 +504,134 @@ async fn transfer_flow_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "message": "Unknown error"
+                })),
+            )
+        }
+    }
+    
+}
+
+#[derive(serde::Deserialize)]
+struct UntransferFlowPayload{
+    name: String,
+    area: String,
+}
+async fn untransfer_flow_handler(
+    State(state): State<Arc<AppState>>,
+    payload: Result<Json<UntransferFlowPayload>, JsonRejection>
+) -> impl IntoResponse {
+
+    match payload {
+        Ok(payload) => {
+            // We got a valid JSON payload
+
+            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
+            
+            if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
+                if let Err(err) = flows::untransfer_flow_from_area(&state.config, &state.client, &flow_id, &payload.area).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "message": format!("Flow could not be untransferred from area '{}'", payload.area),
+                            "error": err.to_string()
+                        })),
+                    );
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "message": format!("Flow successfully untransferred from area '{}'", payload.area),
+                        })),
+                    )
+                }
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "message": "Flow not found"
+                    })),
+                )
+            }
+            
+        }
+        Err(JsonRejection::JsonDataError(err)) => {
+            // Couldn't deserialize the body into the target type
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": format!("Missing fields: {}", err.to_string()), 
+                })),
+            )
+        }
+        Err(JsonRejection::JsonSyntaxError(_)) => {
+            // Syntax error in the body
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": "Invalid JSON"
+                })),
+            )
+        }
+        Err(_) => {
+            // `JsonRejection` is marked `#[non_exhaustive]` so match must
+            // include a catch-all case.
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "message": "Unknown error"
+                })),
+            )
+        }
+    }
+    
+}
+
+async fn delete_flow_handler(
+    State(state): State<Arc<AppState>>,
+    Path(params): Path<std::collections::HashMap<String, String>>,
+    // payload: Result<Json<DeleteFlowPayload>, JsonRejection>
+) -> impl IntoResponse {
+
+    match params.get("flow_name") {
+        Some(flow_name) => {
+            // We got a valid JSON payload
+
+            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
+            
+            if let Some(flow_id) = flows::get_flow_id_by_name(&flows, flow_name.as_str()) {
+                if let Err(err) = flows::delete_flow(&state.client, &flow_id).await {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "message": format!("Flow could not be deleted"),
+                            "error": err.to_string()
+                        })),
+                    );
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "message": format!("Flow successfully deleted"),
+                        })),
+                    )
+                }
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "message": "Flow not found"
+                    })),
+                )
+            }
+            
+        }
+        None => {
+            // `JsonRejection` is marked `#[non_exhaustive]` so match must
+            // include a catch-all case.
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": "Missing flow name"
                 })),
             )
         }
