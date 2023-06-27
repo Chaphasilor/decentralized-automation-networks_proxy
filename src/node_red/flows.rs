@@ -354,6 +354,7 @@ pub async fn transfer_flow_to_area(config: &Config, client: &NodeRedHttpClient, 
 
                     // flow successfully created in new area, now update the input node's target
                     if config.input_nodes.is_some() {
+                        //TODO find node based on Node-RED input port, mapped to input node port in config?
                         if let Some(input_node) = config.input_nodes.as_ref().unwrap().iter().find(|input_node| input_node.flow == original_flow_name) {
                             // send udp message to input node to update target
                             let socket = tokio::net::UdpSocket::bind("127.0.0.1:33000").await.unwrap();

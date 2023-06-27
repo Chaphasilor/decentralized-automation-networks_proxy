@@ -55,28 +55,34 @@ pub async fn forward_message_to_node_red(
 
         let destination = SocketAddr::from(([127, 0, 0, 1], destination_port));
 
-        // println!("sending message to Node-RED: {msg}", msg=msg.to_string());
-        outbound_socket.send_to(msg.to_string().as_bytes(), destination).await?;
-        let sent = SystemTime::now();
+        if let Some(message) = msg["message"].as_str() {
+        
+            println!("sending message from port {} to Node-RED ({}): {}", outbound_socket.local_addr().unwrap().port(), destination, msg.to_string());
+            outbound_socket.send_to(message.as_bytes(), destination).await?;
+            let sent = SystemTime::now();
+    
+            if let Err(err) = tx
+                .send(Message{
+                    message_type: MessageType::Event(Event {
+                        source: None,
+                        destination: Some(destination),
+                        timestamp: sent,
+                        identifier: EventIdentifier{
+                            flow_name: msg["meta"].as_object().unwrap()["flow_name"].as_str().unwrap().to_string(),
+                            execution_area: msg["meta"].as_object().unwrap()["execution_area"].as_str().unwrap().to_string(),
+                        }
+                    }),
+                    response: None,
+                }).await
+            {
+                return Err(ProxyError {
+                    kind: "MessagePassing".to_string(),
+                    message: err.to_string(),
+                });
+            }
 
-        if let Err(err) = tx
-            .send(Message{
-                message_type: MessageType::Event(Event {
-                    source: None,
-                    destination: Some(destination),
-                    timestamp: sent,
-                    identifier: EventIdentifier{
-                        flow_name: msg["meta"].as_object().unwrap()["flow_name"].as_str().unwrap().to_string(),
-                        execution_area: msg["meta"].as_object().unwrap()["execution_area"].as_str().unwrap().to_string(),
-                    }
-                }),
-                response: None,
-            }).await
-        {
-            return Err(ProxyError {
-                kind: "MessagePassing".to_string(),
-                message: err.to_string(),
-            });
+        } else {
+            eprintln!("message received from sensor or proxy didn't contain a `message` field. Not forwarding to Node-RED!");
         }
     } // the socket is closed here
 
@@ -187,7 +193,7 @@ pub async fn udp_proxy_receiver(tx: mpsc::Sender<Message>, inbound_socket: UdpSo
 
         if let Ok(message) = message {
             let message = message.trim_matches(char::from(0)); // trim any NULL characters that are left over from the buffer
-            println!("received message from sensor or proxy: '{message}'");
+            println!("received message from sensor or proxy at port {}: '{}'", reception_port, message);
             let message_json: serde_json::Value = serde_json::from_str(message).unwrap();
 
             let destination_port = destination_port_base + (reception_port % 1000);

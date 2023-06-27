@@ -70,6 +70,7 @@ pub struct PortConfig {
     port_node_red_out_base: u16, // only used in Node-RED
     pub port_in_from_node_red_base: u16,
     pub port_out_to_proxy_or_output_node_base: u16,
+    pub port_output_node_in_base: u16, // only used as a target
     pub port_range_limit: u16,
 }
 
@@ -151,7 +152,7 @@ async fn main() -> std::io::Result<()> {
         let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
         
         tasks.push(tokio::spawn(async move {
-            match node_red::proxy::udp_node_red_receiver(node_receiver_tx, inbound_socket, outbound_socket, config.ports.port_in_from_input_node_base).await {
+            match node_red::proxy::udp_node_red_receiver(node_receiver_tx, inbound_socket, outbound_socket, config.ports.port_output_node_in_base).await {
                 Ok(_) => {}
                 Err(err) => {
                     eprintln!("Error from Node-RED UDP receiver: {}", err.to_string());
