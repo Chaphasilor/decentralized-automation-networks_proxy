@@ -264,7 +264,7 @@ fn lookup_node_red_base_url_by_area_name(config: &Config, area_name: &str) -> Re
     if let Some(areas) = config.areas.as_ref() {
         for area in areas {
             if area.name == area_name {
-                return Ok(area.node_red_base_url.clone());
+                return Ok(format!("http://{}:{}", area.node_red_ip.clone(), area.node_red_port));
             }
         }
     }

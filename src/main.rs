@@ -50,7 +50,8 @@ pub struct Area {
     proxy_ip: String,
     proxy_port_base: u16,
     proxy_webserver_port: u16,
-    node_red_base_url: String,
+    node_red_ip: String,
+    node_red_port: u16,
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -79,7 +80,8 @@ pub struct Config {
     pub area: String,
     pub port_base: u16,
     pub webserver_port: u16,
-    pub node_red_base_url: String,
+    pub node_red_ip: String,
+    pub node_red_port: String,
     pub ports: PortConfig,
     pub areas: Option<Vec<Area>>,
     pub input_nodes: Option<Vec<InputNode>>,
@@ -100,7 +102,7 @@ async fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
     let config = load_config(args.config.as_str()).unwrap();
-    println!("Proxy for area '{}' started!\nNode-RED instance running at {}", config.area, config.node_red_base_url);
+    println!("Proxy for area '{}' started!\nNode-RED instance running at {}:{}", config.area, config.node_red_ip, config.node_red_port);
     
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = vec![];
 
@@ -113,7 +115,7 @@ async fn main() -> std::io::Result<()> {
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap(),
-        base_url: config.node_red_base_url.clone(),
+        base_url: format!("http://{}:{}", config.node_red_ip.clone(), config.node_red_port)
     };
 
     let (tx, mut rx) = mpsc::channel::<Message>(32);
@@ -174,8 +176,10 @@ async fn main() -> std::io::Result<()> {
         let outbound_socket_address = SocketAddr::from(([0, 0, 0, 0], outbound_port));
         let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
 
+        let cloned_config = config.clone();
+
         tasks.push(tokio::spawn(async move {
-            match node_red::proxy::udp_proxy_receiver(proxy_receiver_tx, inbound_socket, outbound_socket, config.ports.port_node_red_in_base).await {
+            match node_red::proxy::udp_proxy_receiver(cloned_config, proxy_receiver_tx, inbound_socket, outbound_socket, config.ports.port_node_red_in_base).await {
                 Ok(_) => {}
                 Err(err) => {
                     eprintln!("Error from proxy UDP receiver: {}", err.to_string());
@@ -195,28 +199,6 @@ async fn main() -> std::io::Result<()> {
 
         latency_test::submit_test_result(&node_red_http_client, test_result).await.unwrap();
 
-        // let flows = node_red::flows::convert_flows_response_to_flows(
-        //     node_red::flows::get_all_flows(&node_red_http_client).await.unwrap(),
-        // );
-        // println!("flows: {}", serde_json::to_string(&flows).unwrap());
-
-        // let test_socket = UdpSocket::bind("0.0.0.0:34999").await.unwrap();
-
-        // if let Err(err) = node_red::proxy::forward_message_to_node_red(
-        //     &test_socket,
-        //     config.ports.port_node_red_in_base + 999,
-        //     json!({
-        //         "message": "hi mom",
-        //         "meta": {
-        //             "flow_name": "Flow 0",
-        //             "execution_area": "room0"
-        //         }
-        //     }),
-        //     Some(Duration::from_millis(250)),
-        //     local_tx.clone(),
-        // ).await {
-        //     eprintln!("Error while forwarding message: {}", err.to_string());
-        // };
     }));
 
     tasks.push(task::spawn_blocking(move || {
