@@ -63,7 +63,7 @@ pub async fn submit_test_result(client: &NodeRedHttpClient, result: LatencyTestR
       .send().await;
 
   match request {
-      Ok(response) => {
+      Ok(_response) => {
         //   println!("status: {}", response.status());
       }
       Err(err) => {

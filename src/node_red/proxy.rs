@@ -1,13 +1,11 @@
-use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, SystemTime};
 use std::{error::Error, fmt};
-use serde_json::json;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc};
 
 use crate::Config;
-use crate::db::{Db, Event, EventIdentifier, Message, MessageType};
+use crate::db::{Event, EventIdentifier, Message, MessageType};
 
 #[derive(Debug)]
 pub struct ProxyError {
@@ -57,7 +55,19 @@ pub async fn forward_message_to_node_red(
         if let Some(message) = msg["message"].as_str() {
         
             println!("sending message from port {} to Node-RED ({}): {}", outbound_socket.local_addr().unwrap().port(), destination, msg.to_string());
-            outbound_socket.send_to(message.as_bytes(), destination).await?;
+            match timeout {
+                Some(timeout) => {
+                    if let Err(err) = tokio::time::timeout(timeout, outbound_socket.send_to(message.as_bytes(), destination)).await {
+                        return Err(ProxyError {
+                            kind: "Timeout".to_string(),
+                            message: err.to_string(),
+                        });
+                    }
+                },
+                None => {
+                    outbound_socket.send_to(message.as_bytes(), destination).await?;
+                }
+            }
             let sent = SystemTime::now();
     
             if let Err(err) = tx
@@ -98,7 +108,7 @@ pub async fn udp_node_red_receiver(tx: mpsc::Sender<Message>, inbound_socket: Ud
 
         buf.fill(0); // clear the buffer
         
-        let (len, addr) = inbound_socket.recv_from(&mut buf).await?;
+        let (_len, addr) = inbound_socket.recv_from(&mut buf).await?;
         let received = SystemTime::now();
         let reception_port = inbound_socket.local_addr().unwrap().port();
         // println!("received message from Node-RED on port {port}", port=reception_port.to_string());
@@ -183,7 +193,7 @@ pub async fn udp_proxy_receiver(config: Config, tx: mpsc::Sender<Message>, inbou
 
         buf.fill(0); // clear the buffer
 
-        let (len, addr) = inbound_socket.recv_from(&mut buf).await?;
+        let (_len, addr) = inbound_socket.recv_from(&mut buf).await?;
         let received = SystemTime::now();
         let reception_port = inbound_socket.local_addr().unwrap().port();
         // println!("received message from input node on port {port}", port=reception_port.to_string());
@@ -203,7 +213,6 @@ pub async fn udp_proxy_receiver(config: Config, tx: mpsc::Sender<Message>, inbou
             {
                 eprintln!("Failed to forward message to Node-RED: {}", err.to_string());
             };
-            let time_since_sent = received.elapsed().expect("Couldn't measure time").as_micros() as u64;
 
             if let Err(err) = tx
                 .send(Message{

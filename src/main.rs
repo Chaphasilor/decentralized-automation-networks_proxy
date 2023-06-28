@@ -5,14 +5,14 @@ use axum::{
     routing::{get, post, put, delete},
     Router,
 };
-use db::{Event, Message};
-use futures::{future, Future};
+use db::{Message};
+use futures::{future};
 use serde_json::json;
 use serde_yaml;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
-use std::{error::Error, fmt};
+use std::sync::{Arc};
+use std::time::{Duration};
+use std::{error::Error};
 use tokio::sync::{mpsc, oneshot};
 use tokio::{net::UdpSocket, task};
 use clap::Parser;
@@ -118,8 +118,7 @@ async fn main() -> std::io::Result<()> {
         base_url: format!("http://{}:{}", config.node_red_ip.clone(), config.node_red_port)
     };
 
-    let (tx, mut rx) = mpsc::channel::<Message>(32);
-    let local_tx = tx.clone();
+    let (tx, rx) = mpsc::channel::<Message>(32);
     let shared_state_tx = tx.clone();
     let node_receiver_tx = tx.clone();
     let proxy_receiver_tx = tx.clone();
@@ -423,7 +422,8 @@ async fn update_flow_status_handler(
 #[derive(serde::Deserialize)]
 struct TransferFlowPayload{
     name: String,
-    newArea: String,
+    #[serde(rename = "newArea")]
+    new_area: String,
 }
 async fn transfer_flow_handler(
     State(state): State<Arc<AppState>>,
@@ -437,11 +437,11 @@ async fn transfer_flow_handler(
             let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
             
             if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
-                if let Err(err) = flows::transfer_flow_to_area(&state.config, &state.client, &flow_id, &payload.newArea).await {
+                if let Err(err) = flows::transfer_flow_to_area(&state.config, &state.client, &flow_id, &payload.new_area).await {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
-                            "message": format!("Flow could not be transferred to area '{}'", payload.newArea),
+                            "message": format!("Flow could not be transferred to area '{}'", payload.new_area),
                             "error": err.to_string()
                         })),
                     );
@@ -449,7 +449,7 @@ async fn transfer_flow_handler(
                     (
                         StatusCode::OK,
                         Json(json!({
-                            "message": format!("Flow successfully transferred to area '{}'", payload.newArea),
+                            "message": format!("Flow successfully transferred to area '{}'", payload.new_area),
                         })),
                     )
                 }
