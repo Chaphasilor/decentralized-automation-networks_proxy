@@ -190,7 +190,9 @@ async fn main() -> std::io::Result<()> {
 
 
     tasks.push(tokio::spawn(async move {
-        let test_result = latency_test::test_latency(10);
+        //TODO iterate through areas from config and test latency to each proxy, input node, and output node
+        let destination = SocketAddr::from(([127, 0, 0, 1], 30000));
+        let test_result = latency_test::test_latency(destination, 10);
 
         println!("\n=== Test Result ===\n");
         println!("One-way latency: {} µs", test_result.trip_time);

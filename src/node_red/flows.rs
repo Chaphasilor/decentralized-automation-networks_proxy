@@ -2,6 +2,7 @@ use std::{collections::{HashMap}, net::SocketAddr, time::Duration};
 use serde::{Serialize, Deserialize, ser::SerializeStruct};
 use serde_with::skip_serializing_none;
 use tokio::time::timeout;
+use local_ip_address::local_ip;
 use std::{error::Error, fmt};
 
 use crate::{NodeRedHttpClient, Config};
@@ -462,7 +463,7 @@ pub async fn untransfer_flow_from_area(config: &Config, client: &NodeRedHttpClie
                             // socket.set_read_timeout(Some(Duration::from_millis(10000))).unwrap();
                             let json = serde_json::json!({
                                 "type": "updateTarget",
-                                "target": proxy_ip,
+                                "target": local_ip().unwrap().to_string(),
                                 "target_port_base": config.port_base
                             });
                             socket.send_to(json.to_string().as_bytes(), input_node_address).await.unwrap();

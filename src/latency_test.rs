@@ -78,7 +78,7 @@ pub async fn submit_test_result(client: &NodeRedHttpClient, result: LatencyTestR
   Ok(())
 }
 
-pub fn test_latency(iterations: usize) -> LatencyTestResult {
+pub fn test_latency(destination: SocketAddr, iterations: usize) -> LatencyTestResult {
   let mut result = LatencyTestResult {
       trip_time: 0,
       round_trip_time: 0,
@@ -88,7 +88,7 @@ pub fn test_latency(iterations: usize) -> LatencyTestResult {
 
   for i in 1..=iterations {
       print!("Iteration {i}: ");
-      match test_latency_once(Some(Duration::from_millis(250))) {
+      match test_latency_once(destination, Some(Duration::from_millis(250))) {
           Ok(current_result) => {
               print!("TT: {} µs, ", current_result.trip_time);
               print!("RTT: {} µs", current_result.round_trip_time);
@@ -110,7 +110,7 @@ pub fn test_latency(iterations: usize) -> LatencyTestResult {
   result
 }
 
-fn test_latency_once(timeout: Option<Duration>) -> Result<LatencyTestResult, LatencyTestError> {
+fn test_latency_once(destination: SocketAddr, timeout: Option<Duration>) -> Result<LatencyTestResult, LatencyTestError> {
   let result;
   {
 
@@ -120,8 +120,6 @@ fn test_latency_once(timeout: Option<Duration>) -> Result<LatencyTestResult, Lat
       let start = SystemTime::now();
       let time = start.duration_since(std::time::UNIX_EPOCH).expect("Couldn't get system time");
       let mut buf = (time.as_micros() as u64).to_be_bytes();
-
-      let destination = SocketAddr::from(([0, 0, 0, 0], 30001));
 
       socket.send_to(&buf, destination)?;
 
