@@ -1,10 +1,7 @@
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::{error::Error, fmt};
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, Duration};
+use std::time::{SystemTime};
 use serde::{Serialize, Deserialize};
-use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 pub type Db = HashMap<String, Vec<Event>>;
