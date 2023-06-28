@@ -6,6 +6,7 @@ use serde_json::json;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::Config;
 use crate::db::{Db, Event, EventIdentifier, Message, MessageType};
 
 #[derive(Debug)]
@@ -45,15 +46,13 @@ impl From<std::io::Error> for ProxyError {
 
 pub async fn forward_message_to_node_red(
     outbound_socket: &UdpSocket,
-    destination_port: u16,
+    destination: SocketAddr,
     msg: serde_json::Value,
     timeout: Option<Duration>,
     tx: mpsc::Sender<Message>,
 ) -> Result<(), ProxyError> {
     {
         // socket.set_read_timeout(timeout).expect("Couldn't set socket timeout");
-
-        let destination = SocketAddr::from(([0, 0, 0, 0], destination_port));
 
         if let Some(message) = msg["message"].as_str() {
         
@@ -177,7 +176,7 @@ pub async fn udp_node_red_receiver(tx: mpsc::Sender<Message>, inbound_socket: Ud
 /**
  * Receives messages from sensors or other proxies and forwards them to Node-RED or another proxy
  */
-pub async fn udp_proxy_receiver(tx: mpsc::Sender<Message>, inbound_socket: UdpSocket, outbound_socket: UdpSocket, destination_port_base: u16) -> Result<(), ProxyError> {
+pub async fn udp_proxy_receiver(config: Config, tx: mpsc::Sender<Message>, inbound_socket: UdpSocket, outbound_socket: UdpSocket, destination_port_base: u16) -> Result<(), ProxyError> {
 
     let mut buf = [0; 2048];
     loop {
@@ -197,9 +196,10 @@ pub async fn udp_proxy_receiver(tx: mpsc::Sender<Message>, inbound_socket: UdpSo
             let message_json: serde_json::Value = serde_json::from_str(message).unwrap();
 
             let destination_port = destination_port_base + (reception_port % 1000);
+            let destination_address = format!("{}:{}", config.node_red_ip, destination_port).parse::<SocketAddr>().unwrap();
 
             if let Err(err) =
-                forward_message_to_node_red(&outbound_socket, destination_port, message_json.clone(), Some(Duration::from_millis(250)), tx.clone()).await
+                forward_message_to_node_red(&outbound_socket, destination_address, message_json.clone(), Some(Duration::from_millis(250)), tx.clone()).await
             {
                 eprintln!("Failed to forward message to Node-RED: {}", err.to_string());
             };
