@@ -1,21 +1,20 @@
 use axum::{
-    extract::{State, Json, rejection::JsonRejection, Path},
+    extract::{rejection::JsonRejection, Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
     Router,
 };
-use db::{Message};
-use futures::{future};
+use clap::Parser;
+use db::Message;
+use futures::future;
 use serde_json::json;
-use serde_yaml;
+use std::error::Error;
 use std::net::SocketAddr;
-use std::sync::{Arc};
-use std::time::{Duration};
-use std::{error::Error};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::{net::UdpSocket, task};
-use clap::Parser;
 
 use crate::node_red::flows;
 
@@ -31,10 +30,20 @@ pub struct NodeRedHttpClient {
 
 impl NodeRedHttpClient {
     fn path_to_url(&self, path: &str) -> String {
-        format!("{}{}{}", self.base_url, if path.starts_with('/') { "" } else { "/" }, path)
+        format!(
+            "{}{}{}",
+            self.base_url,
+            if path.starts_with('/') { "" } else { "/" },
+            path
+        )
     }
     fn path_to_url_with_base_url(&self, path: &str, base_url: &str) -> String {
-        format!("{}{}{}", base_url, if path.starts_with('/') { "" } else { "/" }, path)
+        format!(
+            "{}{}{}",
+            base_url,
+            if path.starts_with('/') { "" } else { "/" },
+            path
+        )
     }
 }
 
@@ -68,7 +77,7 @@ pub struct PortConfig {
     pub port_in_from_input_node_base: u16, // used by proxies and output nodes as inbound port
     pub port_out_to_node_red_base: u16,
     pub port_node_red_in_base: u16, // only used as a target
-    port_node_red_out_base: u16, // only used in Node-RED
+    port_node_red_out_base: u16,    // only used in Node-RED
     pub port_in_from_node_red_base: u16,
     pub port_out_to_proxy_or_output_node_base: u16,
     pub port_output_node_in_base: u16, // only used as a target
@@ -98,24 +107,33 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-
     let args = Args::parse();
 
     let config = load_config(args.config.as_str()).unwrap();
-    println!("Proxy for area '{}' started!\nNode-RED instance running at {}:{}", config.area, config.node_red_ip, config.node_red_port);
-    
+    println!(
+        "Proxy for area '{}' started!\nNode-RED instance running at {}:{}",
+        config.area, config.node_red_ip, config.node_red_port
+    );
+
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = vec![];
 
     let mut default_headers = reqwest::header::HeaderMap::new();
-    default_headers.insert(reqwest::header::HeaderName::from_static("node-red-api-version"), reqwest::header::HeaderValue::from_static("v2"));
+    default_headers.insert(
+        reqwest::header::HeaderName::from_static("node-red-api-version"),
+        reqwest::header::HeaderValue::from_static("v2"),
+    );
 
-    let node_red_http_client = NodeRedHttpClient{
+    let node_red_http_client = NodeRedHttpClient {
         client: reqwest::Client::builder()
             .default_headers(default_headers)
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap(),
-        base_url: format!("http://{}:{}", config.node_red_ip.clone(), config.node_red_port)
+        base_url: format!(
+            "http://{}:{}",
+            config.node_red_ip.clone(),
+            config.node_red_port
+        ),
     };
 
     let (tx, rx) = mpsc::channel::<Message>(32);
@@ -136,35 +154,43 @@ async fn main() -> std::io::Result<()> {
         match db::db_worker(rx).await {
             Ok(_) => {}
             Err(err) => {
-                eprintln!("Error from database worker: {}", err.to_string());
+                eprintln!("Error from database worker: {}", err);
             }
         };
     }));
 
     for port in port_range.clone() {
-
         let node_receiver_tx = node_receiver_tx.clone();
 
         let inbound_port = config.ports.port_in_from_node_red_base + port;
-        let inbound_socket_address = SocketAddr::from(([0, 0, 0, 0], inbound_port)); 
+        let inbound_socket_address = SocketAddr::from(([0, 0, 0, 0], inbound_port));
         let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
 
         let outbound_port = config.ports.port_out_to_proxy_or_output_node_base + port;
         let outbound_socket_address = SocketAddr::from(([0, 0, 0, 0], outbound_port));
         let outbound_socket = UdpSocket::bind(outbound_socket_address).await.unwrap();
-        
+
+        let cloned_config = config.clone();
+
         tasks.push(tokio::spawn(async move {
-            match node_red::proxy::udp_node_red_receiver(node_receiver_tx, inbound_socket, outbound_socket, config.ports.port_output_node_in_base).await {
+            match node_red::proxy::udp_node_red_receiver(
+                cloned_config,
+                node_receiver_tx,
+                inbound_socket,
+                outbound_socket,
+                config.ports.port_output_node_in_base,
+            )
+            .await
+            {
                 Ok(_) => {}
                 Err(err) => {
-                    eprintln!("Error from Node-RED UDP receiver: {}", err.to_string());
+                    eprintln!("Error from Node-RED UDP receiver: {}", err);
                 }
             };
         }));
     }
 
     for port in port_range.clone() {
-
         let proxy_receiver_tx = proxy_receiver_tx.clone();
 
         let inbound_port = config.ports.port_in_from_input_node_base + port;
@@ -178,15 +204,22 @@ async fn main() -> std::io::Result<()> {
         let cloned_config = config.clone();
 
         tasks.push(tokio::spawn(async move {
-            match node_red::proxy::udp_proxy_receiver(cloned_config, proxy_receiver_tx, inbound_socket, outbound_socket, config.ports.port_node_red_in_base).await {
+            match node_red::proxy::udp_proxy_receiver(
+                cloned_config,
+                proxy_receiver_tx,
+                inbound_socket,
+                outbound_socket,
+                config.ports.port_node_red_in_base,
+            )
+            .await
+            {
                 Ok(_) => {}
                 Err(err) => {
-                    eprintln!("Error from proxy UDP receiver: {}", err.to_string());
+                    eprintln!("Error from proxy UDP receiver: {}", err);
                 }
             };
         }));
     }
-
 
     tasks.push(tokio::spawn(async move {
         //TODO iterate through areas from config and test latency to each proxy, input node, and output node
@@ -198,17 +231,19 @@ async fn main() -> std::io::Result<()> {
         println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
         println!();
 
-        latency_test::submit_test_result(&node_red_http_client, test_result).await.unwrap();
-
+        latency_test::submit_test_result(&node_red_http_client, test_result)
+            .await
+            .unwrap();
     }));
 
-    tasks.push(task::spawn_blocking(move || {
-
-    }));
+    tasks.push(task::spawn_blocking(move || {}));
 
     // set up a simple HTTP web server for controlling the proxy
     let app = Router::new()
-        .route("/proxy/nodeRedBaseUrl", get(proxy_node_red_base_url_handler))
+        .route(
+            "/proxy/nodeRedBaseUrl",
+            get(proxy_node_red_base_url_handler),
+        )
         .route("/db/log", get(log_db_handler))
         .route("/db/get", get(get_db_handler))
         .route("/db/save", get(save_db_handler))
@@ -242,10 +277,7 @@ fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
 }
 
 async fn proxy_node_red_base_url_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(json!(state.client.base_url)),
-    )
+    (StatusCode::OK, Json(json!(state.client.base_url)))
 }
 
 async fn log_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -274,10 +306,17 @@ async fn log_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 async fn save_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // get current ISO-8601 timestamp
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+
     if let Ok(_) = state
         .tx
         .send(db::Message {
-            message_type: db::MessageType::SaveDB("./data/db.json".to_string()),
+            message_type: db::MessageType::SaveDB(format!(
+                "./data/{timestamp}_dumb_{area}.json",
+                timestamp = timestamp,
+                area = state.config.area
+            )),
             response: None,
         })
         .await
@@ -345,30 +384,33 @@ async fn get_db_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 #[derive(serde::Deserialize)]
-struct UpdateFlowStatusPayload{
+struct UpdateFlowStatusPayload {
     name: String,
     disabled: bool,
 }
 async fn update_flow_status_handler(
     State(state): State<Arc<AppState>>,
-    payload: Result<Json<UpdateFlowStatusPayload>, JsonRejection>
+    payload: Result<Json<UpdateFlowStatusPayload>, JsonRejection>,
 ) -> impl IntoResponse {
-
     match payload {
         Ok(payload) => {
             // We got a valid JSON payload
 
-            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
-            
+            let flows = flows::convert_flows_response_to_flows(
+                flows::get_all_flows(&state.client).await.unwrap(),
+            );
+
             if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
-                if let Err(err) = flows::update_flow_status(&state.client, &flow_id, payload.disabled).await {
-                    return (
+                if let Err(err) =
+                    flows::update_flow_status(&state.client, &flow_id, payload.disabled).await
+                {
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
                             "message": format!("Flow could not be {}", if payload.disabled {"disabled"} else {"enabled"}),
                             "error": err.to_string()
                         })),
-                    );
+                    )
                 } else {
                     (
                         StatusCode::OK,
@@ -385,20 +427,19 @@ async fn update_flow_status_handler(
                     })),
                 )
             }
-            
         }
         Err(JsonRejection::JsonDataError(err)) => {
             // Couldn't deserialize the body into the target type
-            return (
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
-                    "message": format!("Missing fields: {}", err.to_string()), 
+                    "message": format!("Missing fields: {}", err),
                 })),
             )
         }
         Err(JsonRejection::JsonSyntaxError(_)) => {
             // Syntax error in the body
-            return (
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
                     "message": "Invalid JSON"
@@ -408,7 +449,7 @@ async fn update_flow_status_handler(
         Err(_) => {
             // `JsonRejection` is marked `#[non_exhaustive]` so match must
             // include a catch-all case.
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "message": "Unknown error"
@@ -416,35 +457,43 @@ async fn update_flow_status_handler(
             )
         }
     }
-    
 }
 
 #[derive(serde::Deserialize)]
-struct TransferFlowPayload{
+struct TransferFlowPayload {
     name: String,
     #[serde(rename = "newArea")]
     new_area: String,
 }
 async fn transfer_flow_handler(
     State(state): State<Arc<AppState>>,
-    payload: Result<Json<TransferFlowPayload>, JsonRejection>
+    payload: Result<Json<TransferFlowPayload>, JsonRejection>,
 ) -> impl IntoResponse {
-
     match payload {
         Ok(payload) => {
             // We got a valid JSON payload
 
-            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
-            
+            let flows = flows::convert_flows_response_to_flows(
+                flows::get_all_flows(&state.client).await.unwrap(),
+            );
+
             if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
-                if let Err(err) = flows::transfer_flow_to_area(&state.config, &state.client, &flow_id, &payload.new_area).await {
-                    return (
+                if let Err(err) = flows::transfer_flow_to_area(
+                    flows,
+                    &state.config,
+                    &state.client,
+                    &flow_id,
+                    &payload.new_area,
+                )
+                .await
+                {
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
                             "message": format!("Flow could not be transferred to area '{}'", payload.new_area),
                             "error": err.to_string()
                         })),
-                    );
+                    )
                 } else {
                     (
                         StatusCode::OK,
@@ -461,20 +510,19 @@ async fn transfer_flow_handler(
                     })),
                 )
             }
-            
         }
         Err(JsonRejection::JsonDataError(err)) => {
             // Couldn't deserialize the body into the target type
-            return (
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
-                    "message": format!("Missing fields: {}", err.to_string()), 
+                    "message": format!("Missing fields: {}", err),
                 })),
             )
         }
         Err(JsonRejection::JsonSyntaxError(_)) => {
             // Syntax error in the body
-            return (
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
                     "message": "Invalid JSON"
@@ -484,7 +532,7 @@ async fn transfer_flow_handler(
         Err(_) => {
             // `JsonRejection` is marked `#[non_exhaustive]` so match must
             // include a catch-all case.
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "message": "Unknown error"
@@ -492,34 +540,41 @@ async fn transfer_flow_handler(
             )
         }
     }
-    
 }
 
 #[derive(serde::Deserialize)]
-struct UntransferFlowPayload{
+struct UntransferFlowPayload {
     name: String,
     area: String,
 }
 async fn untransfer_flow_handler(
     State(state): State<Arc<AppState>>,
-    payload: Result<Json<UntransferFlowPayload>, JsonRejection>
+    payload: Result<Json<UntransferFlowPayload>, JsonRejection>,
 ) -> impl IntoResponse {
-
     match payload {
         Ok(payload) => {
             // We got a valid JSON payload
 
-            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
-            
+            let flows = flows::convert_flows_response_to_flows(
+                flows::get_all_flows(&state.client).await.unwrap(),
+            );
+
             if let Some(flow_id) = flows::get_flow_id_by_name(&flows, payload.name.as_str()) {
-                if let Err(err) = flows::untransfer_flow_from_area(&state.config, &state.client, &flow_id, &payload.area).await {
-                    return (
+                if let Err(err) = flows::untransfer_flow_from_area(
+                    &state.config,
+                    &state.client,
+                    &flow_id,
+                    &payload.area,
+                )
+                .await
+                {
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
                             "message": format!("Flow could not be untransferred from area '{}'", payload.area),
                             "error": err.to_string()
                         })),
-                    );
+                    )
                 } else {
                     (
                         StatusCode::OK,
@@ -536,20 +591,19 @@ async fn untransfer_flow_handler(
                     })),
                 )
             }
-            
         }
         Err(JsonRejection::JsonDataError(err)) => {
             // Couldn't deserialize the body into the target type
-            return (
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
-                    "message": format!("Missing fields: {}", err.to_string()), 
+                    "message": format!("Missing fields: {}", err),
                 })),
             )
         }
         Err(JsonRejection::JsonSyntaxError(_)) => {
             // Syntax error in the body
-            return (
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
                     "message": "Invalid JSON"
@@ -559,7 +613,7 @@ async fn untransfer_flow_handler(
         Err(_) => {
             // `JsonRejection` is marked `#[non_exhaustive]` so match must
             // include a catch-all case.
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "message": "Unknown error"
@@ -567,7 +621,6 @@ async fn untransfer_flow_handler(
             )
         }
     }
-    
 }
 
 async fn delete_flow_handler(
@@ -575,22 +628,23 @@ async fn delete_flow_handler(
     Path(params): Path<std::collections::HashMap<String, String>>,
     // payload: Result<Json<DeleteFlowPayload>, JsonRejection>
 ) -> impl IntoResponse {
-
     match params.get("flow_name") {
         Some(flow_name) => {
             // We got a valid JSON payload
 
-            let flows = flows::convert_flows_response_to_flows(flows::get_all_flows(&state.client).await.unwrap());
-            
+            let flows = flows::convert_flows_response_to_flows(
+                flows::get_all_flows(&state.client).await.unwrap(),
+            );
+
             if let Some(flow_id) = flows::get_flow_id_by_name(&flows, flow_name.as_str()) {
                 if let Err(err) = flows::delete_flow(&state.client, &flow_id).await {
-                    return (
+                    (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
                             "message": format!("Flow could not be deleted"),
                             "error": err.to_string()
                         })),
-                    );
+                    )
                 } else {
                     (
                         StatusCode::OK,
@@ -607,12 +661,11 @@ async fn delete_flow_handler(
                     })),
                 )
             }
-            
         }
         None => {
             // `JsonRejection` is marked `#[non_exhaustive]` so match must
             // include a catch-all case.
-            return (
+            (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
                     "message": "Missing flow name"
@@ -620,5 +673,4 @@ async fn delete_flow_handler(
             )
         }
     }
-    
 }
