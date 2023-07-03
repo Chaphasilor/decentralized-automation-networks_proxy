@@ -252,6 +252,7 @@ async fn main() -> std::io::Result<()> {
         .route("/flows/transfer", post(transfer_flow_handler))
         .route("/flows/transfer", delete(untransfer_flow_handler))
         .route("/flows/analyze", post(analyze_flows_handler))
+        .route("/flows/analyze", delete(untransfer_all_flows_handler))
         .with_state(shared_state);
 
     // run our app with hyper
@@ -700,6 +701,68 @@ async fn analyze_flows_handler(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({
                         "message": "Flows could not be analyzed",
+                        "error": err.to_string()
+                    })),
+                ),
+            }
+            
+        }
+        Err(JsonRejection::JsonDataError(err)) => {
+            // Couldn't deserialize the body into the target type
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": format!("Missing fields: {}", err),
+                })),
+            )
+        }
+        Err(JsonRejection::JsonSyntaxError(_)) => {
+            // Syntax error in the body
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "message": "Invalid JSON"
+                })),
+            )
+        }
+        Err(_) => {
+            // `JsonRejection` is marked `#[non_exhaustive]` so match must
+            // include a catch-all case.
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "message": "Unknown error"
+                })),
+            )
+        }
+    }
+
+}
+
+#[derive(serde::Deserialize)]
+struct UntransferAllFlowsPayload {
+    dry_run: Option<bool>,
+}
+async fn untransfer_all_flows_handler(
+    State(state): State<Arc<AppState>>,
+    payload: Result<Json<UntransferAllFlowsPayload>, JsonRejection>,
+) -> impl IntoResponse {
+
+    match payload {
+        Ok(payload) => {
+
+            match flows::untransfer_all_flows(&state.config, &state.client, payload.dry_run).await {
+                Ok(analysis) => (
+                    StatusCode::OK,
+                    Json(serde_json::to_value(analysis).unwrap_or(json!({
+                        "message": "Flows untransferred",
+                        "error": "Could not serialize analysis"
+                    }))),
+                ),
+                Err(err) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "message": "Flows could not be untransferred",
                         "error": err.to_string()
                     })),
                 ),
