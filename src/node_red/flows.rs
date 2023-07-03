@@ -115,6 +115,19 @@ impl FlowError {
     }
 }
 
+pub struct FlowTransferResult {
+    pub flow_id: String,
+    pub flow_name: Option<String>,
+    pub new_flow_name: Option<String>,
+    pub old_area: String,
+    pub new_area: String,
+}
+
+pub struct AnalysisResult {
+    analyzed_flows: Vec<String>,
+    transferred_flows: Vec<FlowTransferResult>,
+}
+
 pub async fn get_all_flows(
     client: &NodeRedHttpClient,
 ) -> Result<FlowsResponse, Box<dyn std::error::Error>> {
@@ -122,16 +135,14 @@ pub async fn get_all_flows(
 
     match request.await {
         Ok(response) => match response.json::<FlowsResponse>().await {
-            Ok(flows_response) => {
-                return Ok(flows_response);
-            }
+            Ok(flows_response) => Ok(flows_response),
             Err(err) => {
                 eprintln!(
                     "Couldn't deserialize flows response: {}\n{:?}",
                     err.source().unwrap(),
                     err
                 );
-                return Err(Box::new(err));
+                Err(Box::new(err))
             }
         },
         Err(err) => {
@@ -140,7 +151,7 @@ pub async fn get_all_flows(
                 err.source().unwrap(),
                 err
             );
-            return Err(Box::new(err));
+            Err(Box::new(err))
         }
     }
 }
@@ -197,7 +208,7 @@ pub fn convert_flows_response_to_flows(response: FlowsResponse) -> Flows {
 }
 
 pub fn get_flow_by_id(flows: &Flows, id: &str) -> Option<Flow> {
-    flows.flows.get(id).map(|flow| flow.clone())
+    flows.flows.get(id).cloned()
 }
 
 pub fn get_flow_id_by_name(flows: &Flows, name: &str) -> Option<String> {
@@ -237,7 +248,7 @@ pub async fn update_flow_status(
             .put(client.path_to_url(format!("/flow/{id}", id = id).as_str()))
             .json(&flow);
         match request.send().await {
-            Ok(_response) => return Ok(()),
+            Ok(_response) => Ok(()),
             Err(err) => {
                 eprintln!(
                     "Couldn't update status of flow with id {}: {}\n{:?}",
@@ -245,10 +256,10 @@ pub async fn update_flow_status(
                     err.source().unwrap(),
                     err
                 );
-                return Err(FlowError::new(format!(
+                Err(FlowError::new(format!(
                     "Couldn't update status of flow with id {}",
                     id
-                )));
+                )))
             }
         }
         // Ok(())
@@ -269,7 +280,7 @@ pub async fn delete_flow(client: &NodeRedHttpClient, id: &str) -> Result<(), Flo
             .delete(client.path_to_url(format!("/flow/{id}", id = id).as_str()));
         match request.send().await {
             Ok(response) => match response.status() {
-                reqwest::StatusCode::OK => {
+                reqwest::StatusCode::NO_CONTENT => {
                     println!("Successfully deleted flow with id {}", id);
                 }
                 _ => {
@@ -323,10 +334,10 @@ fn lookup_node_red_base_url_by_area_name(
             }
         }
     }
-    return Err(FlowError::new(format!(
+    Err(FlowError::new(format!(
         "Couldn't find Node-RED base URL for area {}",
         area_name
-    )));
+    )))
 }
 
 fn lookup_proxy_info_by_area_name(
@@ -344,19 +355,20 @@ fn lookup_proxy_info_by_area_name(
             }
         }
     }
-    return Err(FlowError::new(format!(
+    Err(FlowError::new(format!(
         "Couldn't find proxy base URL for area {}",
         area_name
-    )));
+    )))
 }
 
 pub async fn transfer_flow_to_area(
+    flows: Flows,
     config: &Config,
     client: &NodeRedHttpClient,
     flow_id: &str,
     new_area: &str,
 ) -> Result<(), FlowError> {
-    let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
+    // let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
     let mut flows = flows.flows;
 
     if let Some(flow) = flows.get_mut(flow_id) {
@@ -407,7 +419,7 @@ pub async fn transfer_flow_to_area(
                 // generate a uuid and take the first 16 hex characters (excluding the `-`)
                 let new_node_id = uuid::Uuid::new_v4().simple().to_string()[..16].to_string();
                 new_node_id_by_old_node_id.insert(node.id.clone(), new_node_id.clone());
-                node.id = new_node_id.clone();
+                node.id = new_node_id;
             });
 
             // println!("new_node_id_by_old_node_id: {:?}", new_node_id_by_old_node_id);
@@ -438,7 +450,7 @@ pub async fn transfer_flow_to_area(
                 }
             });
 
-            // update ports to new base port
+            // update sockets to new base port and proxy IP
             // nodes to update: udp in, udp out
             flow.nodes
                 .iter_mut()
@@ -464,6 +476,9 @@ pub async fn transfer_flow_to_area(
                                 proxy_port_base + (outport.parse::<u32>().unwrap() % 10000) as u16
                             );
                         }
+                        if let Some(addr) = &mut node.addr {
+                            *addr = proxy_ip.clone();
+                        }
                     }
                     _ => {}
                 });
@@ -483,11 +498,10 @@ pub async fn transfer_flow_to_area(
                 .json(&flow);
             match request.send().await {
                 Ok(response) => {
-
                     match response.status() {
                         reqwest::StatusCode::OK => {
                             println!("Successfully created flow in new area");
-                            
+
                             // flow successfully created in new area, now update the input node's target
                             if config.input_nodes.is_some() {
                                 //TODO find node based on Node-RED input port, mapped to input node port in config?
@@ -503,7 +517,7 @@ pub async fn transfer_flow_to_area(
                                         tokio::net::UdpSocket::bind("0.0.0.0:33000").await.unwrap();
                                     let ip_vec: Vec<u8> = input_node
                                         .ip
-                                        .split(".")
+                                        .split('.')
                                         .map(|x| x.parse::<u8>().unwrap())
                                         .collect();
                                     let input_node_address = SocketAddr::from((
@@ -523,25 +537,29 @@ pub async fn transfer_flow_to_area(
                                         .unwrap();
 
                                     // wait for ACK to arrive before continuing
-                                    let mut buf = [0; 1024];
+                                    let mut buffer = [0; 1024];
                                     let timeout_duration = 1000;
-                                    if let Err(_) = timeout(
+                                    if (timeout(
                                         Duration::from_millis(timeout_duration),
-                                        socket.recv_from(&mut buf),
+                                        socket.recv_from(&mut buffer),
                                     )
-                                    .await
+                                    .await)
+                                        .is_err()
                                     {
                                         eprintln!(
                                             "No ACK received from input node within {}ms",
                                             timeout_duration
                                         );
-                                        return Err(FlowError::new(format!("ACK from input node timed out. Flow still running in old area.")));
+                                        return Err(FlowError::new("ACK from input node timed out. Flow still running in old area.".to_string()));
                                     }
 
                                     println!("ACK received, disabling flow in old area");
-                                    update_flow_status(&client, flow_id, true).await?;
+                                    update_flow_status(client, flow_id, true).await?;
                                 } else {
-                                    eprintln!("Couldn't find input node for flow {}", original_flow_name);
+                                    eprintln!(
+                                        "Couldn't find input node for flow {}",
+                                        original_flow_name
+                                    );
                                     return Err(FlowError::new(format!(
                                         "Couldn't find input node for flow {}",
                                         original_flow_name
@@ -558,12 +576,12 @@ pub async fn transfer_flow_to_area(
                                     .await
                                     .unwrap_or("Couldn't deserialize response".into())
                             );
-                            return Err(FlowError::new(format!(
-                                "Couldn't create flow in new area"
-                            )));
+                            return Err(FlowError::new(
+                                "Couldn't create flow in new area".to_string(),
+                            ));
                         }
                     }
-                    
+
                     Ok(())
                 }
                 Err(err) => {
@@ -571,20 +589,20 @@ pub async fn transfer_flow_to_area(
                         "Couldn't update status of flow with id {}: {:?}",
                         flow_id, err
                     );
-                    return Err(FlowError::new(format!(
+                    Err(FlowError::new(format!(
                         "Couldn't update status of flow with id {}",
                         flow_id
-                    )));
+                    )))
                 }
             }
             // Ok(())
         } else {
             eprintln!("Couldn't find proxy IP for area {}", new_area);
 
-            return Err(FlowError::new(format!(
+            Err(FlowError::new(format!(
                 "Couldn't find proxy IP for area {}",
                 new_area
-            )));
+            )))
         }
     } else {
         eprintln!("Couldn't find flow with id {}", flow_id);
@@ -616,7 +634,7 @@ pub async fn untransfer_flow_from_area(
                 format!("http://{}:{}", proxy_ip, proxy_webserver_port);
 
             // enable flow in old area
-            match update_flow_status(&client, flow_id, false).await {
+            match update_flow_status(client, flow_id, false).await {
                 Ok(_) => {
                     if config.input_nodes.is_some() {
                         //TODO find node based on Node-RED input port, mapped to input node port in config?
@@ -632,7 +650,7 @@ pub async fn untransfer_flow_from_area(
                                 tokio::net::UdpSocket::bind("0.0.0.0:33000").await.unwrap();
                             let ip_vec: Vec<u8> = input_node
                                 .ip
-                                .split(".")
+                                .split('.')
                                 .map(|x| x.parse::<u8>().unwrap())
                                 .collect();
                             let input_node_address = SocketAddr::from((
@@ -652,19 +670,20 @@ pub async fn untransfer_flow_from_area(
                                 .unwrap();
 
                             // wait for ACK to arrive before continuing
-                            let mut buf = [0; 1024];
+                            let mut buffer = [0; 1024];
                             let timeout_duration = 1000;
-                            if let Err(_) = timeout(
+                            if (timeout(
                                 Duration::from_millis(timeout_duration),
-                                socket.recv_from(&mut buf),
+                                socket.recv_from(&mut buffer),
                             )
-                            .await
+                            .await)
+                                .is_err()
                             {
                                 eprintln!(
                                     "No ACK received from input node within {}ms",
                                     timeout_duration
                                 );
-                                return Err(FlowError::new(format!("ACK from input node timed out. Flow still running in old area.")));
+                                return Err(FlowError::new("ACK from input node timed out. Flow still running in old area.".to_string()));
                             }
 
                             println!(
@@ -724,27 +743,27 @@ pub async fn untransfer_flow_from_area(
                         }
                     }
 
-                    return Ok(());
+                    Ok(())
                 }
                 Err(err) => {
                     eprintln!(
                         "Couldn't update status of flow with id {}: {:?}",
                         flow_id, err
                     );
-                    return Err(FlowError::new(format!(
+                    Err(FlowError::new(format!(
                         "Couldn't update status of flow with id {}",
                         flow_id
-                    )));
+                    )))
                 }
             }
             // Ok(())
         } else {
             eprintln!("Couldn't find proxy IP for area {}", untransfer_from_area);
 
-            return Err(FlowError::new(format!(
+            Err(FlowError::new(format!(
                 "Couldn't find proxy IP for area {}",
                 untransfer_from_area
-            )));
+            )))
         }
     } else {
         eprintln!("Couldn't find flow with id {}", flow_id);
@@ -756,5 +775,5 @@ pub async fn untransfer_flow_from_area(
 }
 
 pub fn to_transferred_flow_name(original_flow_name: &str, new_area: &str) -> Option<String> {
-    Some(format!("{} (transferred)", original_flow_name.clone()))
+    Some(format!("{} (transferred)", original_flow_name))
 }
