@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use local_ip_address::local_ip;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -115,14 +116,17 @@ impl FlowError {
     }
 }
 
+#[derive(Debug, Serialize)]
 pub struct FlowTransferResult {
     pub flow_id: String,
     pub flow_name: Option<String>,
     pub new_flow_name: Option<String>,
     pub old_area: String,
     pub new_area: String,
+    pub transfer_successful: bool,
 }
 
+#[derive(Debug, Serialize)]
 pub struct AnalysisResult {
     analyzed_flows: Vec<String>,
     transferred_flows: Vec<FlowTransferResult>,
@@ -362,14 +366,14 @@ fn lookup_proxy_info_by_area_name(
 }
 
 pub async fn transfer_flow_to_area(
-    flows: Flows,
+    flows:  &mut Flows,
     config: &Config,
     client: &NodeRedHttpClient,
     flow_id: &str,
     new_area: &str,
-) -> Result<(), FlowError> {
+) -> Result<Option<String>, FlowError> {
     // let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
-    let mut flows = flows.flows;
+    let flows = &mut flows.flows;
 
     if let Some(flow) = flows.get_mut(flow_id) {
         if let Ok((proxy_ip, proxy_port_base, _proxy_webserver_port)) =
@@ -582,20 +586,21 @@ pub async fn transfer_flow_to_area(
                         }
                     }
 
-                    Ok(())
                 }
                 Err(err) => {
                     eprintln!(
                         "Couldn't update status of flow with id {}: {:?}",
                         flow_id, err
                     );
-                    Err(FlowError::new(format!(
+                    return Err(FlowError::new(format!(
                         "Couldn't update status of flow with id {}",
                         flow_id
                     )))
                 }
             }
-            // Ok(())
+
+            Ok(flow.name.clone())
+
         } else {
             eprintln!("Couldn't find proxy IP for area {}", new_area);
 
@@ -772,6 +777,76 @@ pub async fn untransfer_flow_from_area(
             flow_id
         )))
     }
+}
+
+pub async fn analyze_flows(
+    config: &Config,
+    client: &NodeRedHttpClient,
+    dry_run: Option<bool>,
+) -> Result<AnalysisResult, FlowError> {
+    let mut flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
+
+    let mut analyzed_flows = Vec::<String>::new();
+    let mut transferrable_flows = Vec::<FlowTransferResult>::new();
+
+    for flow in flows.flows.values() {
+        analyzed_flows.push(flow.name.clone().unwrap_or("Unnamed Flow".to_string()));
+
+        if let Some(input_area) = &flow.input_area {
+            if let Some(output_area) = &flow.output_area {
+                if input_area != "base"
+                    && input_area == output_area
+                    // area specified in config
+                    && config
+                        .areas
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .any(|area| area.name == *input_area)
+                {
+                    transferrable_flows.push(FlowTransferResult {
+                        flow_id: flow.id.clone(),
+                        flow_name: flow.name.clone(),
+                        new_flow_name: None,
+                        old_area: input_area.clone(),
+                        new_area: input_area.clone(),
+                        transfer_successful: false,
+                    });
+                }
+            }
+        }
+    }
+
+    if !dry_run.unwrap_or(false) {
+        println!("Transferring flows...");
+
+        for flow_transfer in transferrable_flows.iter_mut() {
+            println!(
+                "Transferring flow '{}' from area '{}' to area '{}'",
+                flow_transfer.flow_name.clone().unwrap_or("Unnamed Flow".to_string()),
+                flow_transfer.old_area,
+                flow_transfer.new_area
+            );
+            match transfer_flow_to_area(&mut flows, config, client, &flow_transfer.flow_id, flow_transfer.new_area.as_str()).await {
+                Ok(new_name) => {
+                    flow_transfer.transfer_successful = true;
+                    flow_transfer.new_flow_name = new_name;
+                },
+                Err(err) => {
+                    eprintln!("Couldn't transfer flow: {}", err);
+                }
+            }
+        };
+        
+    }
+
+    Ok(AnalysisResult {
+        analyzed_flows: analyzed_flows.into_iter().sorted().collect(),
+        transferred_flows: transferrable_flows
+            .into_iter()
+            .sorted_by(|a, b| a.flow_name.cmp(&b.flow_name))
+            .collect(),
+    })
 }
 
 pub fn to_transferred_flow_name(original_flow_name: &str, new_area: &str) -> Option<String> {
