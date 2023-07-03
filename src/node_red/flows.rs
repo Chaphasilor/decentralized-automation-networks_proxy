@@ -623,7 +623,7 @@ pub async fn untransfer_flow_from_area(
     client: &NodeRedHttpClient,
     flow_id: &str,
     untransfer_from_area: &str,
-) -> Result<(), FlowError> {
+) -> Result<Option<String>, FlowError> {
     let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
     let mut flows = flows.flows;
 
@@ -748,7 +748,7 @@ pub async fn untransfer_flow_from_area(
                         }
                     }
 
-                    Ok(())
+                    Ok(Some(original_flow_name))
                 }
                 Err(err) => {
                     eprintln!(
@@ -795,6 +795,7 @@ pub async fn analyze_flows(
         if let Some(input_area) = &flow.input_area {
             if let Some(output_area) = &flow.output_area {
                 if input_area != "base"
+                    && !flow.disabled
                     && input_area == output_area
                     // area specified in config
                     && config
@@ -808,7 +809,7 @@ pub async fn analyze_flows(
                         flow_id: flow.id.clone(),
                         flow_name: flow.name.clone(),
                         new_flow_name: None,
-                        old_area: input_area.clone(),
+                        old_area: config.area.clone(),
                         new_area: input_area.clone(),
                         transfer_successful: false,
                     });
@@ -834,6 +835,78 @@ pub async fn analyze_flows(
                 },
                 Err(err) => {
                     eprintln!("Couldn't transfer flow: {}", err);
+                }
+            }
+        };
+        
+    }
+
+    Ok(AnalysisResult {
+        analyzed_flows: analyzed_flows.into_iter().sorted().collect(),
+        transferred_flows: transferrable_flows
+            .into_iter()
+            .sorted_by(|a, b| a.flow_name.cmp(&b.flow_name))
+            .collect(),
+    })
+}
+
+pub async fn untransfer_all_flows(
+    config: &Config,
+    client: &NodeRedHttpClient,
+    dry_run: Option<bool>,
+) -> Result<AnalysisResult, FlowError> {
+    let mut flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
+
+    let mut analyzed_flows = Vec::<String>::new();
+    let mut transferrable_flows = Vec::<FlowTransferResult>::new();
+
+    for flow in flows.flows.values() {
+        analyzed_flows.push(flow.name.clone().unwrap_or("Unnamed Flow".to_string()));
+
+        if let Some(input_area) = &flow.input_area {
+            if let Some(output_area) = &flow.output_area {
+                if input_area != "base"
+                    // && flow.disabled
+                    && input_area == output_area
+                    && !flow.name.clone().unwrap_or_default().ends_with("(transferred)")
+                    // area specified in config
+                    && config
+                        .areas
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .any(|area| area.name == *input_area)
+                {
+                    transferrable_flows.push(FlowTransferResult {
+                        flow_id: flow.id.clone(),
+                        flow_name: flow.name.clone(),
+                        new_flow_name: None,
+                        old_area: input_area.clone(),
+                        new_area: "base".to_string(),
+                        transfer_successful: false,
+                    });
+                }
+            }
+        }
+    }
+
+    if !dry_run.unwrap_or(false) {
+        println!("Untransferring flows...");
+
+        for flow_transfer in transferrable_flows.iter_mut() {
+            println!(
+                "Untransferring flow '{}' from area '{}' to area '{}'",
+                flow_transfer.flow_name.clone().unwrap_or("Unnamed Flow".to_string()),
+                flow_transfer.old_area,
+                flow_transfer.new_area
+            );
+            match untransfer_flow_from_area(config, client, &flow_transfer.flow_id, flow_transfer.old_area.as_str()).await {
+                Ok(new_name) => {
+                    flow_transfer.transfer_successful = true;
+                    flow_transfer.new_flow_name = new_name;
+                },
+                Err(err) => {
+                    eprintln!("Couldn't untransfer flow: {}", err);
                 }
             }
         };
