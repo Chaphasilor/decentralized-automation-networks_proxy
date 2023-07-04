@@ -315,7 +315,7 @@ async fn save_db_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
         .tx
         .send(db::Message {
             message_type: db::MessageType::SaveDB(format!(
-                "./data/{timestamp}_dumb_{area}.json",
+                "./data/{timestamp}_dump_{area}.json",
                 timestamp = timestamp,
                 area = state.config.area
             )),
