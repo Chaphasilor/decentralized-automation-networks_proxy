@@ -296,6 +296,5 @@ pub async fn udp_proxy_receiver(
             eprintln!("couldn't parse message from sensor or proxy!");
         }
 
-        //TODO forward message to actual target
     }
 }

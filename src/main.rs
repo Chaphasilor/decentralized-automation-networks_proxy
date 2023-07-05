@@ -103,6 +103,8 @@ struct Args {
     /// Relative path to the configuration file
     #[arg(short, long)]
     config: String,
+    #[arg(long)]
+    pub no_latency_test: bool,
 }
 
 #[tokio::main]
@@ -221,20 +223,23 @@ async fn main() -> std::io::Result<()> {
         }));
     }
 
-    tasks.push(tokio::spawn(async move {
-        //TODO iterate through areas from config and test latency to each proxy, input node, and output node
-        let destination = SocketAddr::from(([127, 0, 0, 1], 30000));
-        let test_result = latency_test::test_latency(destination, 10);
+    if !args.no_latency_test {
+        tasks.push(tokio::spawn(async move {
+            //TODO iterate through areas from config and test latency to each proxy, input node, and output node
+            let destination = SocketAddr::from(([127, 0, 0, 1], 30000));
+            let test_result = latency_test::test_latency(destination, 10);
+    
+            println!("\n=== Test Result ===\n");
+            println!("One-way latency: {} µs", test_result.trip_time);
+            println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
+            println!();
+    
+            latency_test::submit_test_result(&node_red_http_client, test_result)
+                .await
+                .unwrap();
+        }));
+    }
 
-        println!("\n=== Test Result ===\n");
-        println!("One-way latency: {} µs", test_result.trip_time);
-        println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
-        println!();
-
-        latency_test::submit_test_result(&node_red_http_client, test_result)
-            .await
-            .unwrap();
-    }));
 
     tasks.push(task::spawn_blocking(move || {}));
 
