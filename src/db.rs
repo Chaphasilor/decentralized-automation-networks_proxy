@@ -5,6 +5,7 @@ use std::{error::Error, fmt};
 use tokio::sync::{mpsc, oneshot};
 
 pub type Db = HashMap<String, Vec<Event>>;
+pub type TimeOffsetsDb = HashMap<String, i128>;
 
 #[derive(Debug)]
 pub struct DbWorkerError {
@@ -37,6 +38,23 @@ impl fmt::Display for EventIdentifier {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct DeviceIdentifier {
+    pub device_ip: String,
+    pub device_port: u16,
+}
+
+impl fmt::Display for DeviceIdentifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{device_ip}:{device_port}",
+            device_ip = self.device_ip,
+            device_port = self.device_port
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub enum EventHandler {
     ProxyReceiver,
     NodeRedForwarder,
@@ -64,12 +82,19 @@ pub struct Event {
     pub handler: EventHandler,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TimeOffsetConfig {
+    pub identifier: DeviceIdentifier,
+    pub offset: i128,
+}
+
 #[derive(Clone)]
 pub enum MessageType {
     LogDB,
     GetDB,
     SaveDB(String),
     Event(Event),
+    TimeOffset(TimeOffsetConfig),
 }
 
 pub struct Message {
@@ -78,7 +103,8 @@ pub struct Message {
 }
 
 pub async fn db_worker(mut rx: mpsc::Receiver<Message>) -> Result<(), DbWorkerError> {
-    let mut db: Db = HashMap::new();
+    let mut db: Db = Db::new();
+    let mut time_offsets_db = TimeOffsetsDb::new();
 
     while let Some(message) = rx.recv().await {
         match message.message_type {
@@ -119,6 +145,13 @@ pub async fn db_worker(mut rx: mpsc::Receiver<Message>) -> Result<(), DbWorkerEr
                         });
                     }
                 }
+            },
+            MessageType::TimeOffset(e) => {
+                println!("TimeOffsets worker received event: id={id}, offset={offset}", id = e.identifier, offset = e.offset);
+                time_offsets_db.insert(
+                    e.identifier.to_string(),
+                    e.offset,
+                );
             }
         }
     }

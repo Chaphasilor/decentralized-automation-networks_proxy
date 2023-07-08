@@ -64,7 +64,7 @@ pub struct Area {
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
-pub struct InputNode {
+pub struct Node {
     name: String,
     area: String,
     flow: String,
@@ -93,7 +93,8 @@ pub struct Config {
     pub node_red_port: String,
     pub ports: PortConfig,
     pub areas: Option<Vec<Area>>,
-    pub input_nodes: Option<Vec<InputNode>>,
+    pub input_nodes: Option<Vec<Node>>,
+    pub output_nodes: Option<Vec<Node>>,
 }
 
 /// A management server and proxy for Node-RED
@@ -142,6 +143,7 @@ async fn main() -> std::io::Result<()> {
     let shared_state_tx = tx.clone();
     let node_receiver_tx = tx.clone();
     let proxy_receiver_tx = tx.clone();
+    let latency_test_tx = tx.clone();
 
     let shared_state = Arc::new(AppState {
         tx: shared_state_tx,
@@ -226,20 +228,54 @@ async fn main() -> std::io::Result<()> {
     if !args.no_latency_test {
         tasks.push(tokio::spawn(async move {
             //TODO iterate through areas from config and test latency to each proxy, input node, and output node
-            let destination = SocketAddr::from(([127, 0, 0, 1], 30000));
-            let test_result = latency_test::test_latency(destination, 10);
-    
-            println!("\n=== Test Result ===\n");
-            println!("One-way latency: {} µs", test_result.trip_time);
-            println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
-            println!();
-    
-            latency_test::submit_test_result(&node_red_http_client, test_result)
-                .await
-                .unwrap();
+            // let destination = SocketAddr::from(([127, 0, 0, 1], 30000));
+
+            for (device_name, device_ip, device_port) in config
+                .input_nodes
+                .as_ref()
+                .unwrap()
+                .iter()
+                .chain(config.output_nodes.as_ref().unwrap())
+                .map(|area| (area.name.clone(), area.ip.clone(), area.port))
+            {
+                let destination = SocketAddr::from((
+                    device_ip.parse::<std::net::Ipv4Addr>().unwrap(),
+                    device_port,
+                ));
+                let test_result = latency_test::test_latency(destination, 10);
+
+                if let Err(err) = latency_test_tx
+                    .send(Message {
+                        message_type: db::MessageType::TimeOffset(db::TimeOffsetConfig {
+                            identifier: db::DeviceIdentifier {
+                                device_ip,
+                                device_port,
+                            },
+                            offset: test_result.receiver_time_offset,
+                        }),
+                        response: None,
+                    })
+                    .await
+                {
+                    eprintln!("Error sending time offset to database worker: {}", err);
+                }
+
+                println!("\n=== Test Result ===\n");
+                println!("Device: {}", device_name);
+                println!(
+                    "Receiver Time Offset: {} µs",
+                    test_result.receiver_time_offset
+                );
+                println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
+                println!();
+
+                // latency_test::submit_test_result(&node_red_http_client, test_result)
+                //     .await
+                //     .unwrap();
+            }
+
         }));
     }
-
 
     tasks.push(task::spawn_blocking(move || {}));
 
@@ -688,12 +724,10 @@ struct AnalyzeFlowsPayload {
 }
 async fn analyze_flows_handler(
     State(state): State<Arc<AppState>>,
-    payload: Result<Json<AnalyzeFlowsPayload>, JsonRejection>
+    payload: Result<Json<AnalyzeFlowsPayload>, JsonRejection>,
 ) -> impl IntoResponse {
-
     match payload {
         Ok(payload) => {
-
             match flows::analyze_flows(&state.config, &state.client, payload.dry_run).await {
                 Ok(analysis) => (
                     StatusCode::OK,
@@ -710,7 +744,6 @@ async fn analyze_flows_handler(
                     })),
                 ),
             }
-            
         }
         Err(JsonRejection::JsonDataError(err)) => {
             // Couldn't deserialize the body into the target type
@@ -741,7 +774,6 @@ async fn analyze_flows_handler(
             )
         }
     }
-
 }
 
 #[derive(serde::Deserialize)]
@@ -752,10 +784,8 @@ async fn untransfer_all_flows_handler(
     State(state): State<Arc<AppState>>,
     payload: Result<Json<UntransferAllFlowsPayload>, JsonRejection>,
 ) -> impl IntoResponse {
-
     match payload {
         Ok(payload) => {
-
             match flows::untransfer_all_flows(&state.config, &state.client, payload.dry_run).await {
                 Ok(analysis) => (
                     StatusCode::OK,
@@ -772,7 +802,6 @@ async fn untransfer_all_flows_handler(
                     })),
                 ),
             }
-            
         }
         Err(JsonRejection::JsonDataError(err)) => {
             // Couldn't deserialize the body into the target type
@@ -803,5 +832,4 @@ async fn untransfer_all_flows_handler(
             )
         }
     }
-
 }
