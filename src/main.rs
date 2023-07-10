@@ -105,7 +105,7 @@ struct Args {
     #[arg(short, long)]
     config: String,
     #[arg(long)]
-    pub no_latency_test: bool,
+    pub latency_test: bool,
 }
 
 #[tokio::main]
@@ -220,12 +220,12 @@ async fn main() -> std::io::Result<()> {
                 Ok(_) => {}
                 Err(err) => {
                     eprintln!("Error from proxy UDP receiver: {}", err);
-                }
+                }disa
             };
         }));
     }
 
-    if !args.no_latency_test {
+    if args.latency_test {
         tasks.push(tokio::spawn(async move {
             //TODO iterate through areas from config and test latency to each proxy, input node, and output node
             // let destination = SocketAddr::from(([127, 0, 0, 1], 30000));
