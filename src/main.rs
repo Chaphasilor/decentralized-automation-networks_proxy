@@ -22,12 +22,14 @@ pub mod db;
 pub mod latency_test;
 pub mod node_red;
 
+// reqwest doesn't seem to support configuring a base URL, this is a workaround
 #[derive(Clone)]
 pub struct NodeRedHttpClient {
     pub client: reqwest::Client,
     pub base_url: String,
 }
 
+// helpers for combining path and base URL
 impl NodeRedHttpClient {
     fn path_to_url(&self, path: &str) -> String {
         format!(
@@ -47,6 +49,7 @@ impl NodeRedHttpClient {
     }
 }
 
+// state used by axum, contains everything that is potentially needed within endpoint
 struct AppState {
     tx: mpsc::Sender<Message>,
     client: NodeRedHttpClient,
@@ -126,6 +129,7 @@ async fn main() -> std::io::Result<()> {
         reqwest::header::HeaderValue::from_static("v2"),
     );
 
+    // set up the HTTP client for communicating with Node-RED
     let node_red_http_client = NodeRedHttpClient {
         client: reqwest::Client::builder()
             .default_headers(default_headers)
@@ -139,6 +143,7 @@ async fn main() -> std::io::Result<()> {
         ),
     };
 
+    // set up message passing senders. because the tokio tasks are implemented as closures, we need to clone the senders for each task
     let (tx, rx) = mpsc::channel::<Message>(32);
     let shared_state_tx = tx.clone();
     let node_receiver_tx = tx.clone();
@@ -153,7 +158,7 @@ async fn main() -> std::io::Result<()> {
 
     let port_range = 1..=config.ports.port_range_limit;
 
-    // db
+    // db worker
     tasks.push(tokio::spawn(async move {
         match db::db_worker(rx).await {
             Ok(_) => {}
@@ -163,9 +168,11 @@ async fn main() -> std::io::Result<()> {
         };
     }));
 
+    // create node receiver workers, handle forwarding results coming from Node-RED to the correct output node
     for port in port_range.clone() {
         let node_receiver_tx = node_receiver_tx.clone();
 
+        // each worker gets its own pair of sockets, because we can't share sockets between threads
         let inbound_port = config.ports.port_in_from_node_red_base + port;
         let inbound_socket_address = SocketAddr::from(([0, 0, 0, 0], inbound_port));
         let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
@@ -194,9 +201,11 @@ async fn main() -> std::io::Result<()> {
         }));
     }
 
+    // create proxy receiver workers, handle forwarding messages coming from input nodes to Node-RED
     for port in port_range.clone() {
         let proxy_receiver_tx = proxy_receiver_tx.clone();
 
+        // each worker gets its own pair of sockets, because we can't share sockets between threads
         let inbound_port = config.ports.port_in_from_input_node_base + port;
         let inbound_socket_address = SocketAddr::from(([0, 0, 0, 0], inbound_port));
         let inbound_socket = UdpSocket::bind(inbound_socket_address).await.unwrap();
@@ -220,63 +229,69 @@ async fn main() -> std::io::Result<()> {
                 Ok(_) => {}
                 Err(err) => {
                     eprintln!("Error from proxy UDP receiver: {}", err);
-                }disa
+                }
             };
         }));
     }
 
+    // perform latency test (requires `input_nodes` and `output_nodes` to be specified in the config)    
     if args.latency_test {
         tasks.push(tokio::spawn(async move {
-            //TODO iterate through areas from config and test latency to each proxy, input node, and output node
-            // let destination = SocketAddr::from(([127, 0, 0, 1], 30000));
 
-            for (device_name, device_ip, device_port) in config
-                .input_nodes
-                .as_ref()
-                .unwrap()
-                .iter()
-                .chain(config.output_nodes.as_ref().unwrap())
-                .map(|area| (area.name.clone(), area.ip.clone(), area.port))
-            {
-                let destination = SocketAddr::from((
-                    device_ip.parse::<std::net::Ipv4Addr>().unwrap(),
-                    device_port,
-                ));
-                let test_result = latency_test::test_latency(destination, 10);
-
-                if let Err(err) = latency_test_tx
-                    .send(Message {
-                        message_type: db::MessageType::TimeOffset(db::TimeOffsetConfig {
-                            identifier: db::DeviceIdentifier {
-                                device_ip,
-                                device_port,
-                            },
-                            offset: test_result.receiver_time_offset,
-                        }),
-                        response: None,
-                    })
-                    .await
+            if config.input_nodes.is_some() && config.output_nodes.is_some() {
+            
+                for (device_name, device_ip, device_port) in config
+                    .input_nodes
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .chain(config.output_nodes.as_ref().unwrap())
+                    .map(|area| (area.name.clone(), area.ip.clone(), area.port))
                 {
-                    eprintln!("Error sending time offset to database worker: {}", err);
+                    let destination = SocketAddr::from((
+                        device_ip.parse::<std::net::Ipv4Addr>().unwrap(),
+                        device_port,
+                    ));
+                    let test_result = latency_test::test_latency(destination, 10);
+
+                    if let Err(err) = latency_test_tx
+                        .send(Message {
+                            message_type: db::MessageType::TimeOffset(db::TimeOffsetConfig {
+                                identifier: db::DeviceIdentifier {
+                                    device_ip,
+                                    device_port,
+                                },
+                                offset: test_result.receiver_time_offset,
+                            }),
+                            response: None,
+                        })
+                        .await
+                    {
+                        eprintln!("Error sending time offset to database worker: {}", err);
+                    }
+
+                    println!("\n=== Test Result ===\n");
+                    println!("Device: {}", device_name);
+                    println!(
+                        "Receiver Time Offset: {} µs",
+                        test_result.receiver_time_offset
+                    );
+                    println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
+                    println!();
+
+                    // latency_test::submit_test_result(&node_red_http_client, test_result)
+                    //     .await
+                    //     .unwrap();
                 }
 
-                println!("\n=== Test Result ===\n");
-                println!("Device: {}", device_name);
-                println!(
-                    "Receiver Time Offset: {} µs",
-                    test_result.receiver_time_offset
-                );
-                println!("Round-Trip-Time: {} µs", test_result.round_trip_time);
-                println!();
-
-                // latency_test::submit_test_result(&node_red_http_client, test_result)
-                //     .await
-                //     .unwrap();
+            } else {
+                eprintln!("Latency test requires `input_nodes` and `output_nodes` to be specified in the config");
             }
 
         }));
     }
 
+    // any blocking tasks could be performed in here
     tasks.push(task::spawn_blocking(move || {}));
 
     // set up a simple HTTP web server for controlling the proxy
@@ -294,7 +309,7 @@ async fn main() -> std::io::Result<()> {
         .route("/flows/transfer", delete(untransfer_flow_handler))
         .route("/flows/analyze", post(analyze_flows_handler))
         .route("/flows/analyze", delete(untransfer_all_flows_handler))
-        .with_state(shared_state);
+        .with_state(shared_state); // pass the shared state to the router
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
@@ -304,6 +319,7 @@ async fn main() -> std::io::Result<()> {
         .await
         .unwrap();
 
+    // wait for all tasks to finish (should never happen, unless all tasks panic)
     future::join_all(tasks).await;
 
     Ok(())
@@ -318,6 +334,8 @@ fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
 
     config.map_err(|err| err.into())
 }
+
+// handlers for HTTP endpoints
 
 async fn proxy_node_red_base_url_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     (StatusCode::OK, Json(json!(state.client.base_url)))

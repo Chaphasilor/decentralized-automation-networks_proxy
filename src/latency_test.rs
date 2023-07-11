@@ -130,13 +130,14 @@ pub fn test_latency(destination: SocketAddr, iterations: usize) -> LatencyTestRe
     result
 }
 
+// sends a UDP ping from a random port to the given destination
 fn test_latency_once(
     destination: SocketAddr,
     timeout: Option<Duration>,
 ) -> Result<LatencyTestResult, LatencyTestError> {
     let result;
     {
-        let socket = UdpSocket::bind("0.0.0.0:34254")?;
+        let socket = UdpSocket::bind("0.0.0.0:0")?;
         socket
             .set_read_timeout(timeout)
             .expect("Couldn't set socket timeout");
@@ -161,7 +162,7 @@ fn test_latency_once(
         let receiver_time_offset = -((time + time_since_sent/2).as_micros() as i128 - receiver_time.as_micros() as i128);
 
         result = LatencyTestResult {
-            receiver_time_offset: receiver_time_offset,
+            receiver_time_offset,
             round_trip_time: time_since_sent.as_micros() as u64,
         };
     } // the socket is closed here

@@ -106,23 +106,21 @@ pub async fn db_worker(mut rx: mpsc::Receiver<Message>) -> Result<(), DbWorkerEr
     let mut db: Db = Db::new();
     let mut time_offsets_db = TimeOffsetsDb::new();
 
+    // receive messages from the inter-thread communication channel
     while let Some(message) = rx.recv().await {
         match message.message_type {
             MessageType::LogDB => {
                 log_database(&db);
-                continue;
             }
             MessageType::GetDB => {
                 if let Some(response) = message.response {
                     response.send(Ok(get_database(&db))).unwrap();
                 }
-                continue;
             }
             MessageType::SaveDB(path) => {
                 if let Err(err) = save_database(&db, path.as_str()) {
                     eprintln!("Couldn't save database to file: {err}");
                 }
-                continue;
             }
             MessageType::Event(e) => {
                 let timestamp = e.timestamp.duration_since(std::time::UNIX_EPOCH).unwrap();
@@ -163,10 +161,10 @@ pub async fn db_worker(mut rx: mpsc::Receiver<Message>) -> Result<(), DbWorkerEr
  * Serializes the database to JSON
  */
 pub fn get_database(db: &Db) -> serde_json::Value {
-    // serde_json::to_value(db).unwrap_or(json!({
-    //   "error": "Couldn't serialize database to JSON"
-    // }))
-    serde_json::to_value(db).unwrap()
+    // serde_json::to_value(db).unwrap()
+    serde_json::to_value(db).unwrap_or(serde_json::json!({
+      "error": "Couldn't serialize database to JSON"
+    }))
 }
 
 /*
