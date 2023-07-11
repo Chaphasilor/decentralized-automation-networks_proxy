@@ -115,9 +115,7 @@ pub async fn forward_message_to_node_red(
     Ok(())
 }
 
-/**
- * Receives messages from Node-RED and forwards them to the target
- */
+/// Receives messages from Node-RED and forwards them to the target
 pub async fn udp_node_red_receiver(
     config: Config,
     tx: mpsc::Sender<Message>,
@@ -138,7 +136,6 @@ pub async fn udp_node_red_receiver(
 
         if let Ok(message) = message {
             let message = message.trim_matches(char::from(0)); // trim any NULL characters that are left over from the buffer
-                                                               // println!("received message from Node-RED: {message}");
 
             let message_json: serde_json::Value = serde_json::from_str(message).unwrap();
 
@@ -220,9 +217,7 @@ pub async fn udp_node_red_receiver(
     }
 }
 
-/**
- * Receives messages from sensors or other proxies and forwards them to Node-RED or another proxy
- */
+/// Receives messages from sensors or other proxies and forwards them to Node-RED or another proxy
 pub async fn udp_proxy_receiver(
     config: Config,
     tx: mpsc::Sender<Message>,

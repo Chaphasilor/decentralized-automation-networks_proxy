@@ -8,6 +8,8 @@ use tokio::time::timeout;
 
 use crate::{Config, NodeRedHttpClient};
 
+// model Node-RED API responses
+
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FlowNodeResponse {
@@ -76,6 +78,7 @@ pub struct Flow {
     output_area: Option<String>,
 }
 
+// custom serializer to remove input and output areas (they are only used internally)
 impl Serialize for Flow {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -160,6 +163,8 @@ pub async fn get_all_flows(
     }
 }
 
+/// parse Node-RED API response into a more convenient format
+/// also determines input and output areas for each flow
 pub fn convert_flows_response_to_flows(response: FlowsResponse) -> Flows {
     let mut flows = Flows {
         flows: HashMap::<String, Flow>::new(),
@@ -238,10 +243,6 @@ pub async fn update_flow_status(
     let mut flows = flows.flows;
 
     if let Some(flow) = flows.get_mut(id) {
-        // // disable each node in the flow
-        // flow.nodes.iter_mut().for_each(|node| {
-        //     node.disabled = Some(true);
-        // });
         flow.disabled = is_disabled;
 
         // println!("updated flow: {}", serde_json::to_string(&flow).unwrap());
@@ -372,7 +373,6 @@ pub async fn transfer_flow_to_area(
     flow_id: &str,
     new_area: &str,
 ) -> Result<Option<String>, FlowError> {
-    // let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
     let flows = &mut flows.flows;
 
     if let Some(flow) = flows.get_mut(flow_id) {
@@ -850,12 +850,13 @@ pub async fn analyze_flows(
     })
 }
 
+// more or less the reverse of `analyze_flows()`
 pub async fn untransfer_all_flows(
     config: &Config,
     client: &NodeRedHttpClient,
     dry_run: Option<bool>,
 ) -> Result<AnalysisResult, FlowError> {
-    let mut flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
+    let flows = convert_flows_response_to_flows(get_all_flows(client).await.unwrap());
 
     let mut analyzed_flows = Vec::<String>::new();
     let mut transferrable_flows = Vec::<FlowTransferResult>::new();
@@ -922,6 +923,6 @@ pub async fn untransfer_all_flows(
     })
 }
 
-pub fn to_transferred_flow_name(original_flow_name: &str, new_area: &str) -> Option<String> {
+pub fn to_transferred_flow_name(original_flow_name: &str, _new_area: &str) -> Option<String> {
     Some(format!("{} (transferred)", original_flow_name))
 }
