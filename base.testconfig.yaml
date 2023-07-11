@@ -88,7 +88,11 @@ input_nodes:
     ip: 192.168.0.102
     port: 21002
   - name: input_node3.3
-input_nodes:
+    area: area3
+    flow: Flow Area 3.3
+    ip: 192.168.0.102
+    port: 21003
+output_nodes:
   - name: output_node0.1
     area: base
     flow: Flow Area 0.1
