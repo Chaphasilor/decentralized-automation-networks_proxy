@@ -21,7 +21,7 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
     - name: Upload release binary
-        uses: actions/upload-artifact@v3
-        with:
-          name: decentralized-automation-networks_proxy.exe
-          path: target/release/decentralized-automation-networks_proxy.exe
+      uses: actions/upload-artifact@v3
+      with:
+        name: decentralized-automation-networks_proxy.exe
+        path: target/release/decentralized-automation-networks_proxy.exe
