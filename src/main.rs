@@ -104,9 +104,10 @@ pub struct Config {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Relative path to the configuration file
+    /// Path to the configuration file
     #[arg(short, long)]
     config: String,
+    /// Perform a latency test to all input and output nodes on startup
     #[arg(long)]
     pub latency_test: bool,
 }
