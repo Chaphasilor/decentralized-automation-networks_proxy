@@ -290,6 +290,5 @@ pub async fn udp_proxy_receiver(
         } else {
             eprintln!("couldn't parse message from sensor or proxy!");
         }
-
     }
 }

@@ -12,6 +12,7 @@ ports:
   port_out_to_proxy_or_output_node_base: 38000
   port_output_node_in_base: 29000
   port_range_limit: 10
+# areas, input_nodes and output_nodes are only needed on the central node
 areas:
   - name: room1
     proxy_ip: 127.0.0.1

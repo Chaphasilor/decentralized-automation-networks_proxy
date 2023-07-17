@@ -143,13 +143,14 @@ pub async fn db_worker(mut rx: mpsc::Receiver<Message>) -> Result<(), DbWorkerEr
                         });
                     }
                 }
-            },
+            }
             MessageType::TimeOffset(e) => {
-                println!("TimeOffsets worker received event: id={id}, offset={offset}", id = e.identifier, offset = e.offset);
-                time_offsets_db.insert(
-                    e.identifier.to_string(),
-                    e.offset,
+                println!(
+                    "TimeOffsets worker received event: id={id}, offset={offset}",
+                    id = e.identifier,
+                    offset = e.offset
                 );
+                time_offsets_db.insert(e.identifier.to_string(), e.offset);
             }
         }
     }

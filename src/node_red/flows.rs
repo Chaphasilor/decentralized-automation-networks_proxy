@@ -367,7 +367,7 @@ fn lookup_proxy_info_by_area_name(
 }
 
 pub async fn transfer_flow_to_area(
-    flows:  &mut Flows,
+    flows: &mut Flows,
     config: &Config,
     client: &NodeRedHttpClient,
     flow_id: &str,
@@ -585,7 +585,6 @@ pub async fn transfer_flow_to_area(
                             ));
                         }
                     }
-
                 }
                 Err(err) => {
                     eprintln!(
@@ -595,12 +594,11 @@ pub async fn transfer_flow_to_area(
                     return Err(FlowError::new(format!(
                         "Couldn't update status of flow with id {}",
                         flow_id
-                    )))
+                    )));
                 }
             }
 
             Ok(flow.name.clone())
-
         } else {
             eprintln!("Couldn't find proxy IP for area {}", new_area);
 
@@ -824,21 +822,31 @@ pub async fn analyze_flows(
         for flow_transfer in transferrable_flows.iter_mut() {
             println!(
                 "Transferring flow '{}' from area '{}' to area '{}'",
-                flow_transfer.flow_name.clone().unwrap_or("Unnamed Flow".to_string()),
+                flow_transfer
+                    .flow_name
+                    .clone()
+                    .unwrap_or("Unnamed Flow".to_string()),
                 flow_transfer.old_area,
                 flow_transfer.new_area
             );
-            match transfer_flow_to_area(&mut flows, config, client, &flow_transfer.flow_id, flow_transfer.new_area.as_str()).await {
+            match transfer_flow_to_area(
+                &mut flows,
+                config,
+                client,
+                &flow_transfer.flow_id,
+                flow_transfer.new_area.as_str(),
+            )
+            .await
+            {
                 Ok(new_name) => {
                     flow_transfer.transfer_successful = true;
                     flow_transfer.new_flow_name = new_name;
-                },
+                }
                 Err(err) => {
                     eprintln!("Couldn't transfer flow: {}", err);
                 }
             }
-        };
-        
+        }
     }
 
     Ok(AnalysisResult {
@@ -897,21 +905,30 @@ pub async fn untransfer_all_flows(
         for flow_transfer in transferrable_flows.iter_mut() {
             println!(
                 "Untransferring flow '{}' from area '{}' to area '{}'",
-                flow_transfer.flow_name.clone().unwrap_or("Unnamed Flow".to_string()),
+                flow_transfer
+                    .flow_name
+                    .clone()
+                    .unwrap_or("Unnamed Flow".to_string()),
                 flow_transfer.old_area,
                 flow_transfer.new_area
             );
-            match untransfer_flow_from_area(config, client, &flow_transfer.flow_id, flow_transfer.old_area.as_str()).await {
+            match untransfer_flow_from_area(
+                config,
+                client,
+                &flow_transfer.flow_id,
+                flow_transfer.old_area.as_str(),
+            )
+            .await
+            {
                 Ok(new_name) => {
                     flow_transfer.transfer_successful = true;
                     flow_transfer.new_flow_name = new_name;
-                },
+                }
                 Err(err) => {
                     eprintln!("Couldn't untransfer flow: {}", err);
                 }
             }
-        };
-        
+        }
     }
 
     Ok(AnalysisResult {
