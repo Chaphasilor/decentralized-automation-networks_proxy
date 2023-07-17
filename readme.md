@@ -1,5 +1,7 @@
 # Decentralized Automation Networks - Proxy Server
 
+[![Release Build (linux-x64)](https://github.com/Chaphasilor/decentralized-automation-networks_proxy/actions/workflows/rust.yml/badge.svg)](https://github.com/Chaphasilor/decentralized-automation-networks_proxy/actions/workflows/rust.yml)
+
 ## General Overview
 
 This project contains a Rust-based server that can proxy UDP messages for Node-RED. This way, timestamps for incoming and outgoing messages can be recorded, from which the runtime of automations in Node-RED can be calculated. The whole process works like this:

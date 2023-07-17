@@ -16,12 +16,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Build
-      run: cargo build --verbose --release
     - name: Run tests
       run: cargo test --verbose
+    - name: Build
+      run: cargo build --verbose --release
     - name: Upload release binary
       uses: actions/upload-artifact@v3
       with:
-        name: decentralized-automation-networks_proxy.exe
-        path: target/release/decentralized-automation-networks_proxy.exe
+        name: decentralized-automation-networks_proxy
+        path: target/release/decentralized-automation-networks_proxy
