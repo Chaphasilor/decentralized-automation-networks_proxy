@@ -107,7 +107,7 @@ struct Args {
     /// Path to the configuration file
     #[arg(short, long)]
     config: String,
-    /// Perform a latency test to all input and output nodes on startup
+    /// Measure the UDP latency to all input and output nodes on startup
     #[arg(long)]
     pub latency_test: bool,
 }
