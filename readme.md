@@ -14,9 +14,9 @@ The source code of the companion programs can be found at the following location
   *Rust program for sending out dummy messages at a certain interval*
 - Virtual Output Node: <https://github.com/Chaphasilor/decentralized-automation-networks_virtual-output-node>  
   *Rust program for receiving and logging dummy messages*
-- ESP32 Input Node: <https://github.com/Chaphasilor/decentralized-automation-networks_esp-input-node>  
+- ESP32 Input Node: <https://github.com/Chaphasilor/decentralized-automation-networks_esp32-input-node>  
   *Rust-based firmware for the ESP32 micro-controller that sends out messages whenever a button is pressed*
-- ESP32 Output Node: <https://github.com/Chaphasilor/decentralized-automation-networks_esp-output-node>  
+- ESP32 Output Node: <https://github.com/Chaphasilor/decentralized-automation-networks_esp32-output-node>  
   *Rust-based firmware for the ESP32 micro-controller that flashes a LED whenever a message is received*
 
 Additionally, there's a Python-based Jupyter notebook used for analyzing and plotting the results:  
