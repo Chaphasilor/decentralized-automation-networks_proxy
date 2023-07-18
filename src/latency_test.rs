@@ -146,7 +146,7 @@ fn test_latency_once(
         let time = start
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Couldn't get system time");
-            
+
         let data = serde_json::json!({
             "type": "udpPing",
             "replyTo": format!("{}:{}", local_ip()?, socket.local_addr()?.port()),
@@ -158,7 +158,7 @@ fn test_latency_once(
         let (_message_length, _src) = socket.recv_from(&mut buffer)?;
         let time_since_sent = start.elapsed().expect("Couldn't measure time");
         let receiver_time = std::time::Duration::from_micros(u64::from_be_bytes(buffer));
-        dbg!(receiver_time);
+        // dbg!(receiver_time);
         let receiver_time_offset = -((time + time_since_sent/2).as_micros() as i128 - receiver_time.as_micros() as i128);
 
         result = LatencyTestResult {
