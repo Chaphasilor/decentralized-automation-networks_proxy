@@ -131,7 +131,7 @@ MSRV (Minimum Supported Rust Version): 1.69
 1. Install Rust (e.g. from <https://rustup.rs>)
 2. Clone the Repo:  
    ```sh-session
-   git clone https://github.com/Chaphasilor/decentralized-automation-networks_proxy`)
+   git clone https://github.com/Chaphasilor/decentralized-automation-networks_proxy`
    ```
 3. Build the project:  
    ```sh-session
